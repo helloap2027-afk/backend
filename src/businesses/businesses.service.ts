@@ -616,7 +616,7 @@ export class BusinessesService {
       "dentists": "https://images.unsplash.com/photo-1588776814546-1ffcf47267a5?w=800&auto=format&fit=crop&q=80",
     };
 
-    const coverImageUrl = data.coverPhoto?.trim() || categoryCoverMap[catRow.slug] || "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&auto=format&fit=crop&q=80";
+    const coverImageUrl = (data.coverPhoto || data.coverImageUrl || data.imageUrl || data.image || "").toString().trim() || categoryCoverMap[catRow.slug] || "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&auto=format&fit=crop&q=80";
     const primaryPhone = data.phone || data.primaryPhone || "+91 98480 22334";
     const whatsappNumber = data.whatsapp || primaryPhone;
     const supportEmail = data.email || "partner@business.in";
