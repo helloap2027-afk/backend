@@ -1,9 +1,51 @@
-import { Controller, Get, Post, Put, Param, Body, Query, Req } from "@nestjs/common";
+import { Controller, Get, Post, Put, Param, Body, Query, Req, UseGuards } from "@nestjs/common";
 import { AdminService } from "./admin.service";
+import { AuthService } from "../auth/auth.service";
+import { AuthGuard } from "../auth/guards/auth.guard";
+import { CurrentUser } from "../auth/decorators/roles.decorator";
 
 @Controller("admin")
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly authService: AuthService
+  ) {}
+
+  @Post("auth/login")
+  async adminLogin(@Body() body: any, @Req() req: any) {
+    const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "127.0.0.1";
+    const data = await this.authService.adminLogin(body.email, body.password, body.deviceInfo, ip);
+    return {
+      success: true,
+      data
+    };
+  }
+
+  @Post("auth/mfa/verify")
+  async verifyAdminMfa(@Body() body: any, @Req() req: any) {
+    const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "127.0.0.1";
+    const data = await this.authService.verifyAdminMfa(body.mfaChallengeId, body.code, body.deviceInfo, ip);
+    return {
+      success: true,
+      data
+    };
+  }
+
+  @Post("auth/logout")
+  @UseGuards(AuthGuard)
+  async adminAuthLogout(@CurrentUser("sub") userId: string, @Body() body: any) {
+    return this.authService.logout(userId, body.refreshToken);
+  }
+
+  @Get("auth/me")
+  @UseGuards(AuthGuard)
+  async getAdminMe(@CurrentUser("sub") userId: string) {
+    const data = this.authService.getUserProfile(userId);
+    return {
+      success: true,
+      data
+    };
+  }
 
   @Get("dashboard/stats")
   getDashboardStats() {

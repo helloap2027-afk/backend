@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
 import { DatabaseSync } from "node:sqlite";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -45,6 +46,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         full_name TEXT,
         email TEXT UNIQUE,
         avatar_url TEXT,
+        password_hash TEXT,
+        preferred_language TEXT DEFAULT 'English',
         status TEXT NOT NULL DEFAULT 'ACTIVE',
         phone_verified_at TEXT,
         created_at TEXT NOT NULL,
@@ -459,7 +462,29 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(is_read);
       CREATE INDEX IF NOT EXISTS idx_notif_type ON notifications(type);
       CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at);
+
+      CREATE TABLE IF NOT EXISTS auth_mfa_challenges (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        verified_at TEXT,
+        attempts_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
     `);
+
+    // Safe dynamic column migrations for existing SQLite databases
+    try {
+      this.db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT;");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'English';");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE users ADD COLUMN locality_id TEXT;");
+    } catch {}
   }
 
   private seedDefaults() {
@@ -500,6 +525,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         INSERT OR IGNORE INTO admin_preferences (user_id, language, email_notifications, sms_alerts, two_factor_auth, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run("usr_super_admin", "English", 1, 1, 0, now);
+    }
+
+    // Ensure default Super Admin has scrypt-hashed password
+    const adminUser = this.db.prepare("SELECT * FROM users WHERE email = ?").get("admin@hello-hi.in") as any;
+    if (adminUser && (!adminUser.password_hash || adminUser.password_hash.trim() === "")) {
+      const salt = "4a9b2c8f1e6d3a7c";
+      const hash = crypto.scryptSync("admin123", salt, 64).toString("hex");
+      this.db.prepare("UPDATE users SET password_hash = ? WHERE email = ?").run(`${salt}:${hash}`, "admin@hello-hi.in");
     }
 
     // 2. States, Districts, Cities & Localities (Always ensure AP & TS pilot hubs exist)
