@@ -16,6 +16,8 @@ const categories_module_1 = require("./categories/categories.module");
 const businesses_module_1 = require("./businesses/businesses.module");
 const enquiries_module_1 = require("./enquiries/enquiries.module");
 const reviews_module_1 = require("./reviews/reviews.module");
+const admin_module_1 = require("./admin/admin.module");
+const cms_module_1 = require("./cms/cms.module");
 const health_controller_1 = require("./health/health.controller");
 let AppModule = class AppModule {
 };
@@ -31,6 +33,8 @@ exports.AppModule = AppModule = __decorate([
             businesses_module_1.BusinessesModule,
             enquiries_module_1.EnquiriesModule,
             reviews_module_1.ReviewsModule,
+            admin_module_1.AdminModule,
+            cms_module_1.CmsModule,
         ],
         controllers: [health_controller_1.HealthController],
         providers: [],

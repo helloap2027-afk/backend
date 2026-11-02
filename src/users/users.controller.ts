@@ -20,7 +20,7 @@ export class UsersController {
   @Patch("me")
   updateProfile(
     @CurrentUser() user: any,
-    @Body() body: { fullName?: string; email?: string; avatarUrl?: string },
+    @Body() body: { fullName?: string; email?: string; avatarUrl?: string; preferredLanguage?: string; localityId?: string },
   ) {
     const profile = this.usersService.updateProfile(user.sub, body);
     return {

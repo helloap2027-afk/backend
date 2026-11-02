@@ -92,8 +92,29 @@ let BusinessesService = class BusinessesService {
             params.push(filters.localitySlug.toLowerCase());
         }
         if (filters.categorySlug) {
-            baseSql += ` AND cat.slug = ?`;
-            params.push(filters.categorySlug.toLowerCase());
+            const catSlug = filters.categorySlug.toLowerCase();
+            const aliasMap = {
+                "restaurants": ["restaurants", "restaurants-food", "cat-restaurants", "cat-food"],
+                "restaurants-food": ["restaurants", "restaurants-food", "cat-restaurants", "cat-food"],
+                "dentists": ["dentists", "dental-care", "cat-dentists", "cat-dental"],
+                "dental-care": ["dentists", "dental-care", "cat-dentists", "cat-dental"],
+                "rent-hire": ["rent-hire", "cat-rent-hire", "packers-movers", "cat-movers", "tours-travel", "cat-tours"],
+                "contractors": ["contractors", "cat-contractors", "electrical-plumbing", "cat-electric"],
+                "hospitals": ["hospitals", "cat-hospitals", "doctors-clinics", "cat-doctors"],
+                "beauty-spa": ["beauty-spa", "cat-beauty-spa"],
+                "home-decor": ["home-decor", "cat-home-decor", "home-services", "cat-home"],
+                "ask-astro": ["ask-astro", "cat-ask-astro"],
+                "wedding-planning": ["wedding-planning", "cat-wedding-planning"],
+                "education": ["education", "cat-education"],
+                "pet-shops": ["pet-shops", "cat-pet-shops"],
+                "pg-hostels": ["pg-hostels", "cat-pg-hostels"],
+                "estate-agent": ["estate-agent", "cat-estate-agent"],
+                "hotels": ["hotels", "cat-hotels"],
+            };
+            const targetMatches = aliasMap[catSlug] || [catSlug, `cat-${catSlug}`];
+            const placeholders = targetMatches.map(() => "?").join(", ");
+            baseSql += ` AND (cat.slug IN (${placeholders}) OR cat.id IN (${placeholders}))`;
+            params.push(...targetMatches, ...targetMatches);
         }
         if (filters.minRating) {
             baseSql += ` AND b.average_rating >= ?`;
@@ -312,6 +333,104 @@ let BusinessesService = class BusinessesService {
             categories,
             localities,
         };
+    }
+    registerVendorBusiness(userId, data) {
+        if (!data.name || !data.categoryId || !data.cityId) {
+            throw new Error("Business name, primary category, and city are required.");
+        }
+        const now = new Date().toISOString();
+        const businessId = `biz_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const baseSlug = data.name
+            .toLowerCase()
+            .trim()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+        const slug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
+        const primaryPhone = data.primaryPhone || data.phone || "+919848012345";
+        this.db.execute(`
+      INSERT INTO businesses (id, name, legal_name, slug, description, primary_phone, whatsapp_number, support_email, is_verified, status, average_rating, total_reviews, total_enquiries, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'PENDING', 0.0, 0, 0, ?, ?)
+    `, [
+            businessId,
+            data.name,
+            data.legalName || data.name,
+            slug,
+            data.description || null,
+            primaryPhone,
+            data.whatsappNumber || primaryPhone,
+            data.supportEmail || null,
+            now,
+            now
+        ]);
+        const locId = `loc_${Date.now()}`;
+        const lat = data.latitude ? parseFloat(data.latitude) : 16.5062;
+        const lng = data.longitude ? parseFloat(data.longitude) : 80.6480;
+        this.db.execute(`
+      INSERT INTO business_locations (id, business_id, city_id, locality_id, address_line1, landmark, pincode, latitude, longitude, is_primary)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `, [
+            locId,
+            businessId,
+            data.cityId,
+            data.localityId || null,
+            data.addressLine1 || data.name,
+            data.landmark || null,
+            data.pincode || "520001",
+            lat,
+            lng
+        ]);
+        const catLinkId = `bcat_${Date.now()}`;
+        this.db.execute(`
+      INSERT INTO business_categories (id, business_id, category_id, is_primary)
+      VALUES (?, ?, ?, 1)
+    `, [catLinkId, businessId, data.categoryId]);
+        const ownerLinkId = `bo_${Date.now()}`;
+        this.db.execute(`
+      INSERT INTO business_owners (id, business_id, user_id, ownership_type)
+      VALUES (?, ?, ?, 'PRIMARY_OWNER')
+    `, [ownerLinkId, businessId, userId]);
+        const vendorRole = this.db.queryOne("SELECT id FROM roles WHERE name = 'VENDOR_OWNER'");
+        if (vendorRole) {
+            const existingPerm = this.db.queryOne("SELECT id FROM user_permissions WHERE user_id = ? AND role_id = ?", [userId, vendorRole.id]);
+            if (!existingPerm) {
+                this.db.execute(`
+          INSERT INTO user_permissions (id, user_id, role_id)
+          VALUES (?, ?, ?)
+        `, [`perm_${Date.now()}`, userId, vendorRole.id]);
+            }
+        }
+        this.db.execute(`
+      INSERT INTO notifications (id, title, message, type, recipient, is_read, related_entity, related_id, created_at)
+      VALUES (?, ?, ?, 'KYC_VERIFICATION', 'Super Admin', 0, 'businesses', ?, ?)
+    `, [
+            `notif_${Date.now()}`,
+            `New Vendor Registration: ${data.name}`,
+            `A new business "${data.name}" has been registered by vendor and is awaiting verification.`,
+            businessId,
+            now
+        ]);
+        return {
+            businessId,
+            name: data.name,
+            slug,
+            status: "PENDING",
+            isVerified: false,
+            message: "Business registered successfully and submitted for administrator verification."
+        };
+    }
+    getVendorRegistrationStatus(userId) {
+        return this.db.query(`
+      SELECT b.id, b.name, b.slug, b.status, b.is_verified as isVerified, b.created_at as createdAt,
+             c.name as cityName, cat.name as categoryName
+      FROM business_owners bo
+      JOIN businesses b ON bo.business_id = b.id
+      LEFT JOIN business_locations bl ON bl.business_id = b.id AND bl.is_primary = 1
+      LEFT JOIN cities c ON c.id = bl.city_id
+      LEFT JOIN business_categories bc ON bc.business_id = b.id AND bc.is_primary = 1
+      LEFT JOIN categories cat ON cat.id = bc.category_id
+      WHERE bo.user_id = ?
+      ORDER BY b.created_at DESC
+    `, [userId]);
     }
 };
 exports.BusinessesService = BusinessesService;

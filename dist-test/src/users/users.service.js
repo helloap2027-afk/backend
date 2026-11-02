@@ -37,8 +37,18 @@ let UsersService = class UsersService {
        SET full_name = COALESCE(?, full_name), 
            email = COALESCE(?, email), 
            avatar_url = COALESCE(?, avatar_url),
+           preferred_language = COALESCE(?, preferred_language),
+           locality_id = COALESCE(?, locality_id),
            updated_at = ?
-       WHERE id = ?`, [data.fullName || null, data.email || null, data.avatarUrl || null, now, userId]);
+       WHERE id = ?`, [
+            data.fullName || null,
+            data.email || null,
+            data.avatarUrl || null,
+            data.preferredLanguage || null,
+            data.localityId || null,
+            now,
+            userId
+        ]);
         return this.authService.getUserProfile(userId);
     }
     evaluateModeSwitch(userId, targetMode) {

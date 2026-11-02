@@ -201,18 +201,54 @@ let AuthService = class AuthService {
         }
     }
     getUserProfile(userId) {
-        const user = this.db.queryOne("SELECT * FROM users WHERE id = ?", [userId]);
+        const user = this.db.queryOne(`
+      SELECT 
+        u.id,
+        u.phone_number,
+        u.full_name,
+        u.email,
+        u.avatar_url,
+        u.preferred_language,
+        u.locality_id,
+        u.status,
+        u.phone_verified_at,
+        u.created_at,
+        u.updated_at,
+        loc.name as locality_name,
+        c.id as city_id,
+        c.name as city_name,
+        s.id as state_id,
+        s.name as state_name
+      FROM users u
+      LEFT JOIN localities loc ON loc.id = u.locality_id
+      LEFT JOIN cities c ON c.id = loc.city_id
+      LEFT JOIN states s ON s.id = c.state_id
+      WHERE u.id = ?
+    `, [userId]);
         if (!user)
             throw new common_1.UnauthorizedException("User not found.");
+        const roles = this.getUserRoles(userId);
+        const businesses = this.getUserBusinesses(userId);
         return {
             id: user.id,
             phoneNumber: user.phone_number,
             fullName: user.full_name,
             email: user.email,
             avatarUrl: user.avatar_url,
+            preferredLanguage: user.preferred_language || "English",
             status: user.status,
-            roles: this.getUserRoles(user.id),
-            ownedBusinesses: this.getUserBusinesses(user.id)
+            phoneVerifiedAt: user.phone_verified_at,
+            createdAt: user.created_at,
+            updatedAt: user.updated_at,
+            locality: user.locality_name ? {
+                id: user.locality_id,
+                name: user.locality_name,
+                cityName: user.city_name,
+                stateName: user.state_name
+            } : null,
+            roles,
+            businesses,
+            ownedBusinesses: businesses
         };
     }
     getUserRoles(userId) {
@@ -226,6 +262,214 @@ let AuthService = class AuthService {
        FROM business_owners bo
        JOIN businesses b ON bo.business_id = b.id
        WHERE bo.user_id = ?`, [userId]);
+    }
+    async resendOtp(challengeId) {
+        const challenge = this.db.queryOne("SELECT * FROM otp_challenges WHERE id = ?", [challengeId]);
+        if (!challenge) {
+            throw new common_1.BadRequestException("Invalid OTP challenge reference.");
+        }
+        if (challenge.verified_at) {
+            throw new common_1.BadRequestException("This challenge has already been verified.");
+        }
+        const now = new Date();
+        const lastSentTime = new Date(challenge.created_at).getTime();
+        const elapsedSeconds = Math.floor((now.getTime() - lastSentTime) / 1000);
+        if (elapsedSeconds < config_1.APP_CONFIG.auth.otpCooldownSeconds) {
+            const remaining = config_1.APP_CONFIG.auth.otpCooldownSeconds - elapsedSeconds;
+            throw new common_1.BadRequestException(`Please wait ${remaining} seconds before resending OTP.`);
+        }
+        const rawOtp = crypto.randomInt(100000, 999999).toString();
+        const otpHash = this.hashString(rawOtp);
+        const expiresAt = new Date(now.getTime() + config_1.APP_CONFIG.auth.otpTtlSeconds * 1000).toISOString();
+        this.db.execute(`UPDATE otp_challenges 
+       SET otp_code_hash = ?, attempts_count = 0, expires_at = ?, created_at = ?
+       WHERE id = ?`, [otpHash, expiresAt, now.toISOString(), challengeId]);
+        if (process.env.NODE_ENV !== "production") {
+            console.log(`[SMS GATEWAY RESEND] To: ${challenge.phone_number} | Verification Code: ${rawOtp}`);
+        }
+        return {
+            challengeId,
+            expiresInSeconds: config_1.APP_CONFIG.auth.otpTtlSeconds,
+            resendCooldownSeconds: config_1.APP_CONFIG.auth.otpCooldownSeconds,
+            ...(process.env.NODE_ENV !== "production" ? { devOtp: rawOtp } : {})
+        };
+    }
+    getUserSessions(userId) {
+        return this.db.query(`SELECT id, device_info as deviceInfo, ip_address as ipAddress, expires_at as expiresAt, created_at as createdAt
+       FROM user_sessions
+       WHERE user_id = ? AND revoked_at IS NULL
+       ORDER BY created_at DESC`, [userId]);
+    }
+    async revokeSession(userId, sessionId) {
+        const now = new Date().toISOString();
+        this.db.execute("UPDATE user_sessions SET revoked_at = ? WHERE id = ? AND user_id = ?", [now, sessionId, userId]);
+        return { success: true, message: "Session revoked successfully." };
+    }
+    async logoutAll(userId) {
+        const now = new Date().toISOString();
+        this.db.execute("UPDATE user_sessions SET revoked_at = ? WHERE user_id = ?", [now, userId]);
+        return { success: true, message: "All sessions revoked successfully." };
+    }
+    async switchRole(userId, targetRole) {
+        const userRoles = this.getUserRoles(userId);
+        const normalizedTarget = targetRole.toUpperCase();
+        if (!userRoles.includes(normalizedTarget)) {
+            throw new common_1.ForbiddenException(`User is not authorized for role '${targetRole}'.`);
+        }
+        const user = this.db.queryOne("SELECT * FROM users WHERE id = ?", [userId]);
+        const now = new Date();
+        const token = this.signJwt({
+            sub: user.id,
+            phone: user.phone_number,
+            roles: [normalizedTarget],
+            iat: Math.floor(now.getTime() / 1000),
+            exp: Math.floor(now.getTime() / 1000) + config_1.APP_CONFIG.auth.accessTokenTtlMinutes * 60
+        });
+        return {
+            activeRole: normalizedTarget,
+            accessToken: token
+        };
+    }
+    async adminLogin(email, password, deviceInfo = "Admin Console", ipAddress = "127.0.0.1") {
+        if (!email || !password) {
+            throw new common_1.BadRequestException("Email and password are required.");
+        }
+        const user = this.db.queryOne("SELECT * FROM users WHERE email = ?", [email]);
+        if (!user) {
+            throw new common_1.UnauthorizedException("Invalid administrator credentials.");
+        }
+        const roles = this.getUserRoles(user.id);
+        const hasAdminAccess = roles.includes("SUPER_ADMIN") || roles.includes("OPERATIONS");
+        if (!hasAdminAccess) {
+            throw new common_1.ForbiddenException("Access denied: Not authorized for Super Admin console.");
+        }
+        if (!user.password_hash) {
+            throw new common_1.UnauthorizedException("Invalid administrator credentials.");
+        }
+        const isPasswordValid = this.verifyPassword(password, user.password_hash);
+        if (!isPasswordValid) {
+            throw new common_1.UnauthorizedException("Invalid administrator credentials.");
+        }
+        const prefs = this.db.queryOne("SELECT two_factor_auth FROM admin_preferences WHERE user_id = ?", [user.id]);
+        const requiresMfa = prefs ? Boolean(prefs.two_factor_auth) : false;
+        if (requiresMfa) {
+            const rawMfa = crypto.randomInt(100000, 999999).toString();
+            const mfaHash = this.hashString(rawMfa);
+            const mfaChallengeId = `mfa_${crypto.randomUUID()}`;
+            const now = new Date();
+            const expiresAt = new Date(now.getTime() + 5 * 60 * 1000).toISOString();
+            this.db.execute(`INSERT INTO auth_mfa_challenges (id, user_id, code_hash, expires_at, attempts_count, created_at)
+         VALUES (?, ?, ?, ?, 0, ?)`, [mfaChallengeId, user.id, mfaHash, expiresAt, now.toISOString()]);
+            if (process.env.NODE_ENV !== "production") {
+                console.log(`[ADMIN MFA CODE] User: ${user.email} | Code: ${rawMfa} (Valid 5 mins)`);
+            }
+            return {
+                requiresMfa: true,
+                mfaChallengeId,
+                expiresInSeconds: 300,
+                maskedEmail: user.email.replace(/(.{2})(.*)(?=@)/, (_, a, b) => a + "*".repeat(b.length)),
+                ...(process.env.NODE_ENV !== "production" ? { devMfaCode: rawMfa } : {})
+            };
+        }
+        const now = new Date();
+        const sessionId = `sess_${crypto.randomUUID()}`;
+        const rawRefreshToken = `rft_${crypto.randomBytes(32).toString("hex")}`;
+        const refreshTokenHash = this.hashString(rawRefreshToken);
+        const sessionExpiresAt = new Date(now.getTime() + config_1.APP_CONFIG.auth.refreshTokenTtlDays * 24 * 60 * 60 * 1000).toISOString();
+        this.db.execute(`INSERT INTO user_sessions (id, user_id, refresh_token_hash, device_info, ip_address, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`, [sessionId, user.id, refreshTokenHash, deviceInfo, ipAddress, sessionExpiresAt, now.toISOString()]);
+        const accessToken = this.signJwt({
+            sub: user.id,
+            phone: user.phone_number,
+            roles,
+            iat: Math.floor(now.getTime() / 1000),
+            exp: Math.floor(now.getTime() / 1000) + config_1.APP_CONFIG.auth.accessTokenTtlMinutes * 60
+        });
+        return {
+            requiresMfa: false,
+            accessToken,
+            refreshToken: rawRefreshToken,
+            tokenType: "Bearer",
+            expiresIn: config_1.APP_CONFIG.auth.accessTokenTtlMinutes * 60,
+            user: {
+                id: user.id,
+                email: user.email,
+                fullName: user.full_name,
+                role: "SUPER_ADMIN",
+                roles
+            }
+        };
+    }
+    async verifyAdminMfa(mfaChallengeId, code, deviceInfo = "Admin Console", ipAddress = "127.0.0.1") {
+        if (!mfaChallengeId || !code) {
+            throw new common_1.BadRequestException("MFA challenge ID and verification code are required.");
+        }
+        const challenge = this.db.queryOne("SELECT * FROM auth_mfa_challenges WHERE id = ?", [mfaChallengeId]);
+        if (!challenge) {
+            throw new common_1.BadRequestException("Invalid MFA challenge reference.");
+        }
+        if (challenge.verified_at) {
+            throw new common_1.BadRequestException("This MFA code has already been verified.");
+        }
+        const now = new Date();
+        if (new Date(challenge.expires_at) < now) {
+            throw new common_1.BadRequestException("MFA code expired. Please log in again.");
+        }
+        if (challenge.attempts_count >= 5) {
+            throw new common_1.ForbiddenException("Maximum MFA verification attempts exceeded.");
+        }
+        const inputHash = this.hashString(code);
+        if (inputHash !== challenge.code_hash) {
+            this.db.execute("UPDATE auth_mfa_challenges SET attempts_count = attempts_count + 1 WHERE id = ?", [mfaChallengeId]);
+            throw new common_1.UnauthorizedException("Incorrect MFA verification code.");
+        }
+        this.db.execute("UPDATE auth_mfa_challenges SET verified_at = ? WHERE id = ?", [now.toISOString(), mfaChallengeId]);
+        const user = this.db.queryOne("SELECT * FROM users WHERE id = ?", [challenge.user_id]);
+        const roles = this.getUserRoles(user.id);
+        const sessionId = `sess_${crypto.randomUUID()}`;
+        const rawRefreshToken = `rft_${crypto.randomBytes(32).toString("hex")}`;
+        const refreshTokenHash = this.hashString(rawRefreshToken);
+        const sessionExpiresAt = new Date(now.getTime() + config_1.APP_CONFIG.auth.refreshTokenTtlDays * 24 * 60 * 60 * 1000).toISOString();
+        this.db.execute(`INSERT INTO user_sessions (id, user_id, refresh_token_hash, device_info, ip_address, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`, [sessionId, user.id, refreshTokenHash, deviceInfo, ipAddress, sessionExpiresAt, now.toISOString()]);
+        const accessToken = this.signJwt({
+            sub: user.id,
+            phone: user.phone_number,
+            roles,
+            iat: Math.floor(now.getTime() / 1000),
+            exp: Math.floor(now.getTime() / 1000) + config_1.APP_CONFIG.auth.accessTokenTtlMinutes * 60
+        });
+        return {
+            accessToken,
+            refreshToken: rawRefreshToken,
+            tokenType: "Bearer",
+            expiresIn: config_1.APP_CONFIG.auth.accessTokenTtlMinutes * 60,
+            user: {
+                id: user.id,
+                email: user.email,
+                fullName: user.full_name,
+                role: "SUPER_ADMIN",
+                roles
+            }
+        };
+    }
+    hashPassword(password) {
+        const salt = crypto.randomBytes(16).toString("hex");
+        const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+        return `${salt}:${hash}`;
+    }
+    verifyPassword(password, storedHash) {
+        try {
+            const [salt, key] = storedHash.split(":");
+            if (!salt || !key)
+                return false;
+            const keyBuffer = Buffer.from(key, "hex");
+            const derivedKey = crypto.scryptSync(password, salt, 64);
+            return crypto.timingSafeEqual(keyBuffer, derivedKey);
+        }
+        catch {
+            return false;
+        }
     }
     hashString(input) {
         return crypto.createHash("sha256").update(input).digest("hex");

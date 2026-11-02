@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-test/
+data/*.db
+data/*.sqlite*
+*.log
+.env*
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+.turbo/
