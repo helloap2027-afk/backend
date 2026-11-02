@@ -1,9 +1,29 @@
-import { Controller, Get, Param, Query } from "@nestjs/common";
+import { Controller, Get, Post, Body, Param, Query } from "@nestjs/common";
 import { BusinessesService } from "./businesses.service";
 
 @Controller("businesses")
 export class BusinessesController {
   constructor(private readonly businessesService: BusinessesService) {}
+
+  @Post()
+  createBusiness(@Body() body: any) {
+    const data = this.businessesService.createFreeBusinessListing(body);
+    return {
+      success: true,
+      data,
+      message: "Business listing published and saved in database successfully."
+    };
+  }
+
+  @Post("free-listing")
+  createFreeListing(@Body() body: any) {
+    const data = this.businessesService.createFreeBusinessListing(body);
+    return {
+      success: true,
+      data,
+      message: "Business listing published and saved in database successfully."
+    };
+  }
 
   @Get(":slug")
   getBusinessBySlug(
