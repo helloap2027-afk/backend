@@ -4,6 +4,7 @@
   "private": true,
   "description": "HELLO Central REST API Engine (NestJS)",
   "scripts": {
+    "dev": "nest start --watch",
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
