@@ -319,8 +319,36 @@ export class AuthService {
   }
 
   getUserProfile(userId: string) {
-    const user = this.db.queryOne<any>("SELECT * FROM users WHERE id = ?", [userId]);
+    const user = this.db.queryOne<any>(`
+      SELECT 
+        u.id,
+        u.phone_number,
+        u.full_name,
+        u.email,
+        u.avatar_url,
+        u.preferred_language,
+        u.locality_id,
+        u.status,
+        u.phone_verified_at,
+        u.created_at,
+        u.updated_at,
+        loc.name as locality_name,
+        c.id as city_id,
+        c.name as city_name,
+        s.id as state_id,
+        s.name as state_name
+      FROM users u
+      LEFT JOIN localities loc ON loc.id = u.locality_id
+      LEFT JOIN cities c ON c.id = loc.city_id
+      LEFT JOIN districts d ON d.id = c.district_id
+      LEFT JOIN states s ON s.id = d.state_id
+      WHERE u.id = ?
+    `, [userId]);
+
     if (!user) throw new UnauthorizedException("User not found.");
+
+    const roles = this.getUserRoles(userId);
+    const businesses = this.getUserBusinesses(userId);
 
     return {
       id: user.id,
@@ -328,9 +356,20 @@ export class AuthService {
       fullName: user.full_name,
       email: user.email,
       avatarUrl: user.avatar_url,
+      preferredLanguage: user.preferred_language || "English",
       status: user.status,
-      roles: this.getUserRoles(user.id),
-      ownedBusinesses: this.getUserBusinesses(user.id)
+      phoneVerifiedAt: user.phone_verified_at,
+      createdAt: user.created_at,
+      updatedAt: user.updated_at,
+      locality: user.locality_name ? {
+        id: user.locality_id,
+        name: user.locality_name,
+        cityName: user.city_name,
+        stateName: user.state_name
+      } : null,
+      roles,
+      businesses,
+      ownedBusinesses: businesses
     };
   }
 
