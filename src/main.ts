@@ -48,7 +48,20 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Business-Id", "X-Requested-With", "Accept", "If-None-Match"]
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Business-Id",
+      "X-Requested-With",
+      "Accept",
+      "If-None-Match",
+      "Cache-Control",
+      "cache-control",
+      "Pragma",
+      "pragma",
+      "Expires",
+      "Origin"
+    ]
   });
 
   // Swagger Documentation
