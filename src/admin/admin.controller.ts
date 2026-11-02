@@ -6,6 +6,7 @@ import { CurrentUser } from "../auth/decorators/roles.decorator";
 
 @Controller("admin")
 export class AdminController {
+
   constructor(
     private readonly adminService: AdminService,
     private readonly authService: AuthService
@@ -46,6 +47,7 @@ export class AdminController {
       data
     };
   }
+
 
   @Get("dashboard/stats")
   getDashboardStats() {
@@ -149,6 +151,108 @@ export class AdminController {
     };
   }
 
+  // =========================================================================
+  // WALLET TRANSACTIONS ENDPOINTS
+  // =========================================================================
+
+  @Get("payments/wallet-transactions")
+  getWalletTransactions(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("type") type?: string,
+    @Query("status") status?: string,
+    @Query("userType") userType?: string
+  ) {
+    const res = this.adminService.getWalletTransactions({
+      page,
+      pageSize,
+      search,
+      type,
+      status,
+      userType,
+    });
+    return { success: true, ...res };
+  }
+
+  @Post("payments/wallet-transactions/bulk-delete")
+  bulkDeleteWalletTransactions(@Body() body: { ids: string[] }) {
+    return this.adminService.bulkDeleteWalletTransactions(body.ids || []);
+  }
+
+  @Post("payments/wallet-transactions/:id/delete")
+  deleteWalletTransaction(@Param("id") id: string) {
+    return this.adminService.deleteWalletTransaction(id);
+  }
+
+  // =========================================================================
+  // WITHDRAWALS ENDPOINTS
+  // =========================================================================
+
+  @Get("payments/withdrawals")
+  getWithdrawals(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("status") status?: string
+  ) {
+    const res = this.adminService.getWithdrawals({
+      page,
+      pageSize,
+      search,
+      status,
+    });
+    return { success: true, ...res };
+  }
+
+  @Post("payments/withdrawals/bulk-delete")
+  bulkDeleteWithdrawals(@Body() body: { ids: string[] }) {
+    return this.adminService.bulkDeleteWithdrawals(body.ids || []);
+  }
+
+  @Put("payments/withdrawals/:id/status")
+  updateWithdrawalStatus(
+    @Param("id") id: string,
+    @Body() body: { status: string; payoutRef?: string }
+  ) {
+    return this.adminService.updateWithdrawalStatus(id, body.status, body.payoutRef);
+  }
+
+  @Post("payments/withdrawals/:id/delete")
+  deleteWithdrawal(@Param("id") id: string) {
+    return this.adminService.deleteWithdrawal(id);
+  }
+
+  // =========================================================================
+  // PLANS PURCHASED (SUBSCRIPTIONS) ENDPOINTS
+  // =========================================================================
+
+  @Get("payments/plans-purchased")
+  getPlansPurchased(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("status") status?: string
+  ) {
+    const res = this.adminService.getPlansPurchased({
+      page,
+      pageSize,
+      search,
+      status,
+    });
+    return { success: true, ...res };
+  }
+
+  @Post("payments/plans-purchased/bulk-delete")
+  bulkDeletePlansPurchased(@Body() body: { ids: string[] }) {
+    return this.adminService.bulkDeletePlansPurchased(body.ids || []);
+  }
+
+  @Post("payments/plans-purchased/:id/delete")
+  deletePlanPurchased(@Param("id") id: string) {
+    return this.adminService.deletePlanPurchased(id);
+  }
+
   @Get("payments/:id")
   getPaymentById(@Param("id") id: string) {
     return {
@@ -236,6 +340,132 @@ export class AdminController {
   markNotificationAsRead(@Param("id") id: string) {
     return this.adminService.markNotificationAsRead(id);
   }
+
+  @Post("notifications/bulk-delete")
+  bulkDeleteNotifications(@Body() body: { ids: string[] }) {
+    return this.adminService.bulkDeleteNotifications(body.ids || []);
+  }
+
+  @Post("notifications/:id/delete")
+  deleteNotification(@Param("id") id: string) {
+    return this.adminService.deleteNotification(id);
+  }
+
+  // =========================================================================
+  // CUSTOMER MANAGEMENT ENDPOINTS (SERVER-SIDE SEARCH, FILTER, PAGINATION, CRUD)
+  // =========================================================================
+
+  @Get("customers")
+  getCustomers(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("status") status?: string,
+    @Query("city") city?: string,
+    @Query("sortBy") sortBy?: string,
+    @Query("sortOrder") sortOrder?: string
+  ) {
+    const res = this.adminService.getCustomers({
+      page,
+      pageSize,
+      search,
+      status,
+      city,
+      sortBy,
+      sortOrder,
+    });
+    return {
+      success: true,
+      ...res,
+    };
+  }
+
+  @Get("customers/:id")
+  getCustomerById(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getCustomerById(id),
+    };
+  }
+
+  @Put("customers/:id")
+  updateCustomer(@Param("id") id: string, @Body() body: any) {
+    const data = this.adminService.updateCustomer(id, body);
+    return {
+      success: true,
+      message: "Customer profile updated successfully",
+      data,
+    };
+  }
+
+  @Post("customers/bulk-delete")
+  bulkDeleteCustomers(@Body() body: { ids: string[] }) {
+    return this.adminService.bulkDeleteCustomers(body.ids || []);
+  }
+
+  @Post("customers/:id/delete")
+  deleteCustomer(@Param("id") id: string) {
+    return this.adminService.deleteCustomer(id);
+  }
+
+  // =========================================================================
+  // MERCHANT MANAGEMENT ENDPOINTS (SERVER-SIDE SEARCH, FILTER, PAGINATION, CRUD)
+  // =========================================================================
+
+  @Get("merchants")
+  getMerchants(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("status") status?: string,
+    @Query("kyc") kyc?: string,
+    @Query("category") category?: string,
+    @Query("city") city?: string,
+    @Query("sortBy") sortBy?: string,
+    @Query("sortOrder") sortOrder?: string
+  ) {
+    const res = this.adminService.getMerchants({
+      page,
+      pageSize,
+      search,
+      status,
+      kyc,
+      category,
+      city,
+      sortBy,
+      sortOrder,
+    });
+    return {
+      success: true,
+      ...res,
+    };
+  }
+
+  @Get("merchants/:id")
+  getMerchantById(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getMerchantById(id),
+    };
+  }
+
+  @Put("merchants/:id")
+  updateMerchant(@Param("id") id: string, @Body() body: any) {
+    const data = this.adminService.updateMerchant(id, body);
+    return {
+      success: true,
+      message: "Merchant business details updated successfully",
+      data,
+    };
+  }
+
+  @Post("merchants/bulk-delete")
+  bulkDeleteMerchants(@Body() body: { ids: string[] }) {
+    return this.adminService.bulkDeleteMerchants(body.ids || []);
+  }
+
+  @Post("merchants/:id/delete")
+  deleteMerchant(@Param("id") id: string) {
+    return this.adminService.deleteMerchant(id);
+  }
 }
-
-

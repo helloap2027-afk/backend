@@ -114,6 +114,21 @@ export class EnquiriesService {
       [business.id]
     );
 
+    // Automated Push Notification Trigger (NEW_ENQUIRY_RECEIVED)
+    try {
+      const template = this.db.queryOne<any>(
+        `SELECT title_template, body_template, status FROM push_templates WHERE event_type = 'NEW_ENQUIRY_RECEIVED' AND status = 'ACTIVE'`
+      );
+      const title = template?.title_template?.replace("{{service_name}}", business.name) || `New enquiry for ${business.name}!`;
+      const body = template?.body_template?.replace("{{locality}}", "your service area") || `A customer (${input.customerName.trim()}) requested a callback for ${business.name}.`;
+
+      this.db.execute(
+        `INSERT INTO notifications (id, title, message, type, recipient, is_read, related_entity, related_id, created_at)
+         VALUES (?, ?, ?, 'SYSTEM_ALERT', 'Super Admin', 0, 'enquiries', ?, ?)`,
+        [`notif_${Date.now()}`, title, body, enquiryId, now]
+      );
+    } catch {}
+
     return {
       id: enquiryId,
       referenceNo,

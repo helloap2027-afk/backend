@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, ensureSqlJs } from "../types/sqlite-compat";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
@@ -12,6 +12,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private mysqlPool: mysql.Pool | null = null;
 
   async onModuleInit() {
+    await ensureSqlJs();
     this.initDatabase();
     await this.initMySQL();
   }
@@ -497,6 +498,36 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_notif_type ON notifications(type);
       CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at);
 
+      
+      -- =========================================================================
+      -- WALLET TRANSACTIONS & WITHDRAWALS SCHEMA
+      -- =========================================================================
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        id TEXT PRIMARY KEY,
+        wallet_id TEXT NOT NULL,
+        user_name TEXT NOT NULL,
+        user_type TEXT NOT NULL,
+        type TEXT NOT NULL,
+        amount REAL NOT NULL,
+        balance_after REAL NOT NULL,
+        reference TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS withdrawals (
+        id TEXT PRIMARY KEY,
+        merchant_id TEXT NOT NULL,
+        merchant_name TEXT NOT NULL,
+        amount REAL NOT NULL,
+        bank_account TEXT NOT NULL,
+        ifsc_code TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payout_ref TEXT,
+        requested_at TEXT NOT NULL,
+        processed_at TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS auth_mfa_challenges (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -507,7 +538,117 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at TEXT NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
-    `);
+    
+      CREATE TABLE IF NOT EXISTS ad_campaigns (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        ad_title TEXT NOT NULL,
+        notification_title TEXT NOT NULL,
+        notification_body TEXT NOT NULL,
+        subtitle TEXT,
+        banner_url TEXT,
+        category TEXT,
+        priority TEXT DEFAULT 'NORMAL',
+        target_audience TEXT DEFAULT 'ALL',
+        target_city TEXT DEFAULT 'All',
+        target_locality TEXT,
+        destination_type TEXT DEFAULT 'APP_SCREEN',
+        destination_url TEXT,
+        scheduled_at TEXT,
+        status TEXT DEFAULT 'DRAFT',
+        target_count INTEGER DEFAULT 0,
+        eligible_count INTEGER DEFAULT 0,
+        sent_count INTEGER DEFAULT 0,
+        failed_count INTEGER DEFAULT 0,
+        created_by TEXT DEFAULT 'Super Admin',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS coupons (
+        id TEXT PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        terms TEXT,
+        banner_url TEXT,
+        category TEXT DEFAULT 'All',
+        discount_type TEXT NOT NULL,
+        discount_value REAL NOT NULL,
+        min_order_value REAL DEFAULT 0,
+        max_discount REAL DEFAULT 0,
+        usage_limit INTEGER DEFAULT 1000,
+        per_user_limit INTEGER DEFAULT 1,
+        redemption_count INTEGER DEFAULT 0,
+        applicable_city TEXT DEFAULT 'All',
+        applicable_category TEXT DEFAULT 'All',
+        valid_from TEXT NOT NULL,
+        valid_until TEXT NOT NULL,
+        status TEXT DEFAULT 'ACTIVE',
+        created_by TEXT DEFAULT 'Super Admin',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS coupon_redemptions (
+        id TEXT PRIMARY KEY,
+        coupon_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        user_name TEXT,
+        order_value REAL NOT NULL,
+        discount_applied REAL NOT NULL,
+        order_reference TEXT,
+        redeemed_at TEXT NOT NULL,
+        FOREIGN KEY (coupon_id) REFERENCES coupons(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS in_app_notifications (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        category TEXT DEFAULT 'ANNOUNCEMENT',
+        banner_url TEXT,
+        target_audience TEXT DEFAULT 'ALL',
+        target_city TEXT DEFAULT 'All',
+        destination_url TEXT,
+        priority TEXT DEFAULT 'NORMAL',
+        scheduled_at TEXT,
+        expires_at TEXT,
+        status TEXT DEFAULT 'PUBLISHED',
+        read_count INTEGER DEFAULT 0,
+        created_by TEXT DEFAULT 'Super Admin',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS push_templates (
+        id TEXT PRIMARY KEY,
+        event_type TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        title_template TEXT NOT NULL,
+        body_template TEXT NOT NULL,
+        destination_url TEXT,
+        status TEXT DEFAULT 'ACTIVE',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS normal_push_logs (
+        id TEXT PRIMARY KEY,
+        notification_ref TEXT UNIQUE NOT NULL,
+        event_type TEXT NOT NULL,
+        recipient_type TEXT NOT NULL,
+        recipient_id TEXT,
+        recipient_phone TEXT,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        destination_url TEXT,
+        delivery_status TEXT NOT NULL DEFAULT 'DELIVERED',
+        error_reason TEXT,
+        created_at TEXT NOT NULL,
+        sent_at TEXT NOT NULL
+      );
+
+`);
 
     // Safe dynamic column migrations for existing SQLite databases
     try {
@@ -1652,6 +1793,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
+      
+    try {
+      this.db.exec(`
+        INSERT OR IGNORE INTO push_templates (id, event_type, name, title_template, body_template, destination_url, status, created_at, updated_at) VALUES
+        ('tmpl_1', 'REFERRAL_REWARD_GRANTED', 'Referral Reward Credited', 'Congratulations! You earned ₹{{reward_amount}}', 'Your referral {{referee_name}} joined Hello! Bonus credited to your wallet.', 'wallet', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_2', 'BUSINESS_LISTING_APPROVED', 'Business Listing Approved', 'Your business {{business_name}} is now live!', 'Customers in {{city}} can now find your services and place enquiries directly.', 'business/profile', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_3', 'NEW_ENQUIRY_RECEIVED', 'New Customer Enquiry', 'New enquiry for {{service_name}}!', 'A customer in {{locality}} requested a callback. Open enquiry to respond.', 'enquiries', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_4', 'BUSINESS_VERIFICATION_COMPLETED', 'KYC Verification Completed', 'Your documents have been verified!', 'Your verified badge is now active on your store listing.', 'business/kyc', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_5', 'ACCOUNT_STATUS_CHANGED', 'Account Security Alert', 'Security status update for your account', 'Your account settings were updated on {{timestamp}} from {{device}}.', 'profile/security', 'ACTIVE', datetime('now'), datetime('now'));
+      INSERT OR IGNORE INTO normal_push_logs (id, notification_ref, event_type, recipient_type, recipient_id, recipient_phone, title, message, destination_url, delivery_status, created_at, sent_at) VALUES
+      ('npl_1', 'PUSH-TXN-98210', 'NEW_ENQUIRY_RECEIVED', 'BUSINESS', 'biz-amravati', '+919848011111', 'New Customer Enquiry for Amravati Grand Restaurant!', 'A customer in your service area requested a callback. Open enquiry to respond.', 'enquiries', 'DELIVERED', datetime('now', '-1 hours'), datetime('now', '-1 hours')),
+      ('npl_2', 'PUSH-TXN-98211', 'BUSINESS_LISTING_APPROVED', 'MERCHANT', 'biz-siri-dental', '+919848022222', 'Your business Siri Dental Clinic is now live!', 'Customers in Vijayawada can now find your services and place enquiries directly.', 'business/profile', 'DELIVERED', datetime('now', '-3 hours'), datetime('now', '-3 hours')),
+      ('npl_3', 'PUSH-TXN-98212', 'REFERRAL_REWARD_GRANTED', 'CUSTOMER', 'user-cust-102', '+919848033333', 'Congratulations! You earned ₹150', 'Your referral Ravi Kumar joined Hello! Bonus credited to your wallet.', 'wallet', 'DELIVERED', datetime('now', '-5 hours'), datetime('now', '-5 hours')),
+      ('npl_4', 'PUSH-TXN-98213', 'BUSINESS_VERIFICATION_COMPLETED', 'MERCHANT', 'biz-amravati', '+919848011111', 'KYC Verification Completed', 'Your verified badge is now active on your store listing.', 'business/kyc', 'DELIVERED', datetime('now', '-1 days'), datetime('now', '-1 days')),
+      ('npl_5', 'PUSH-TXN-98214', 'ACCOUNT_STATUS_CHANGED', 'CUSTOMER', 'user-cust-105', '+919848044444', 'Security status update for your account', 'Your account settings were updated on today from Chrome Mobile.', 'profile/security', 'DELIVERED', datetime('now', '-2 days'), datetime('now', '-2 days'));
+    
+      `);
+    } catch {}
+  
+
+
+      
+
+
       const sampleNotifs = [
         { id: "notif_001", title: "4 New Merchant KYC Submissions", message: "Vijayawada & Guntur vendors submitted documents for verification.", type: "KYC_VERIFICATION", isRead: 0, entity: "businesses", refId: "queue-1", date: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
         { id: "notif_002", title: "Monthly Revenue Milestone Crossed", message: "Platform subscription collections crossed ₹18,45,200 benchmark target.", type: "FINANCIAL", isRead: 0, entity: "subscriptions", refId: "sub_101", date: new Date(Date.now() - 60 * 60 * 1000).toISOString() },
@@ -1666,6 +1831,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       for (const n of sampleNotifs) {
         insertNotif.run(n.id, n.title, n.message, n.type, "Super Admin", n.isRead, n.entity, n.refId, n.date, n.isRead ? n.date : null);
       }
+    }
+  
+
+    // 9. Wallet Transactions
+    const txCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM wallet_transactions");
+    if (!txCount || txCount.c === 0) {
+      const insertTx = this.db.prepare(
+        "INSERT INTO wallet_transactions (id, wallet_id, user_name, user_type, type, amount, balance_after, reference, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      );
+      const nowIso = new Date().toISOString();
+      insertTx.run("wt-001", "WAL-1001", "Vijay Kumar", "CUSTOMER", "CREDIT", 500, 1500, "UPI/2026/89123", "SUCCESS", nowIso);
+      insertTx.run("wt-002", "WAL-1002", "Swagath Grand Hotel", "MERCHANT", "DEBIT", 1200, 4800, "COMMISSION/992", "SUCCESS", nowIso);
+      insertTx.run("wt-003", "WAL-1003", "Sneha Reddy", "CUSTOMER", "REFUND", 250, 750, "REF/882194", "SUCCESS", nowIso);
+      insertTx.run("wt-004", "WAL-1004", "Sai Medicals", "MERCHANT", "WITHDRAWAL", 3000, 2000, "WDL/99012", "PENDING", nowIso);
+    }
+
+    // 10. Withdrawals
+    const wdlCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM withdrawals");
+    if (!wdlCount || wdlCount.c === 0) {
+      const insertWdl = this.db.prepare(
+        "INSERT INTO withdrawals (id, merchant_id, merchant_name, amount, bank_account, ifsc_code, status, payout_ref, requested_at, processed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      );
+      const nowIso = new Date().toISOString();
+      insertWdl.run("wdl-101", "biz-swagath-grand", "Swagath Grand Hotel", 8500, "HDFC0001234 - 501002938192", "HDFC0001234", "APPROVED", "PAYOUT-HDFC-9912", nowIso, nowIso);
+      insertWdl.run("wdl-102", "biz-sai-medicals", "Sai Medical & General Stores", 4200, "SBI0004921 - 20391829481", "SBI0004921", "PENDING", null, nowIso, null);
+      insertWdl.run("wdl-103", "biz-apex-rentals", "Apex Self-Drive Cars", 15000, "ICIC0000832 - 10928374619", "ICIC0000832", "PROCESSING", "PAYOUT-ICICI-1102", nowIso, null);
     }
   }
 

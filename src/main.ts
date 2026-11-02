@@ -23,28 +23,8 @@ async function bootstrap() {
   // Comprehensive CORS Configuration (Web, Mobile 8081, Admin, LAN)
   app.enableCors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      // Allow requests with no origin (like mobile apps, curl, or Postman)
-      if (!origin) return callback(null, true);
-      const allowedPatterns = [
-        "https://hello-hi.in",
-        "https://admin.hello-hi.in",
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:8081",
-        "http://127.0.0.1:8081",
-        "http://localhost:19006"
-      ];
-      if (
-        allowedPatterns.includes(origin) ||
-        origin.startsWith("http://localhost:") ||
-        origin.startsWith("http://127.0.0.1:") ||
-        origin.startsWith("http://192.168.") ||
-        origin.startsWith("exp://")
-      ) {
-        return callback(null, true);
-      }
-      return callback(null, true); // Permissive in dev so mobile is never blocked
+      // Permissive in dev so mobile and web admin are never blocked
+      return callback(null, true);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -60,7 +40,11 @@ async function bootstrap() {
       "Pragma",
       "pragma",
       "Expires",
-      "Origin"
+      "Origin",
+      "x-admin-user",
+      "x-admin-role",
+      "X-Admin-User",
+      "X-Admin-Role"
     ]
   });
 
@@ -80,4 +64,3 @@ async function bootstrap() {
 }
 
 bootstrap();
-
