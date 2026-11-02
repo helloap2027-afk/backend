@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
-import { calculateHaversineDistanceKm, generateSlug } from "@hello/utils";
-import { isValidCoordinates, isValidPincode } from "@hello/validation";
+import { calculateHaversineDistanceKm, generateSlug, isValidCoordinates, isValidPincode } from "../common/utils";
+
 import * as crypto from "node:crypto";
 
 export interface GeoLocationResult {

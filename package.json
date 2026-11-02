@@ -22,9 +22,11 @@
     "@nestjs/platform-express": "^10.4.0",
     "@nestjs/swagger": "^7.4.0",
     "@nestjs/terminus": "^10.2.3",
+    "@types/sql.js": "^1.4.11",
     "mysql2": "^3.24.6",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "sql.js": "^1.15.2"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.0",

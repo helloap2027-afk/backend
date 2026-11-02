@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
-import { isValidIndianPhone, normalizeIndianPhone, isValidOtp } from "@hello/validation";
-import { APP_CONFIG } from "@hello/config";
+import { isValidIndianPhone, normalizeIndianPhone, isValidOtp, APP_CONFIG } from "../common/utils";
+
 import * as crypto from "node:crypto";
 
 export interface TokenPayload {
