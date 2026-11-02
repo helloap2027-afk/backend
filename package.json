@@ -4,6 +4,7 @@
   "private": true,
   "description": "HELLO Central REST API Engine (NestJS)",
   "scripts": {
+    "dev": "nest start --watch",
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -12,15 +13,16 @@
     "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
+    "@hello/config": "workspace:*",
+    "@hello/contracts": "workspace:*",
+    "@hello/utils": "workspace:*",
+    "@hello/validation": "workspace:*",
     "@nestjs/common": "^10.4.0",
     "@nestjs/core": "^10.4.0",
     "@nestjs/platform-express": "^10.4.0",
     "@nestjs/swagger": "^7.4.0",
     "@nestjs/terminus": "^10.2.3",
-    "@hello/contracts": "workspace:*",
-    "@hello/config": "workspace:*",
-    "@hello/validation": "workspace:*",
-    "@hello/utils": "workspace:*",
+    "mysql2": "^3.24.6",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
@@ -32,4 +34,3 @@
     "typescript": "^5.6.3"
   }
 }
-
