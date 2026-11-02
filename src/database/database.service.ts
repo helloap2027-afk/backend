@@ -403,6 +403,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         timestamp TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS contact_submissions (
+        id TEXT PRIMARY KEY,
+        full_name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT,
+        subject TEXT,
+        message TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'NEW',
+        created_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_cms_page_lookup ON cms_pages(slug, language);
       CREATE INDEX IF NOT EXISTS idx_cms_rev_page ON cms_revisions(page_id, revision_number);
       CREATE INDEX IF NOT EXISTS idx_cms_audit_slug ON cms_audit_logs(page_slug, timestamp);

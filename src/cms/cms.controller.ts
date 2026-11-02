@@ -141,4 +141,44 @@ export class CmsController {
       data: this.cmsService.getPublicPage(slug, lang || "en"),
     };
   }
+
+  @Get("cms/pages/:slug")
+  getPublicPageBySlug(@Param("slug") slug: string, @Query("lang") lang?: string) {
+    return {
+      success: true,
+      data: this.cmsService.getPublicPage(slug, lang || "en"),
+    };
+  }
+
+  @Get("pages/:slug")
+  getPublicPageShort(@Param("slug") slug: string, @Query("lang") lang?: string) {
+    return {
+      success: true,
+      data: this.cmsService.getPublicPage(slug, lang || "en"),
+    };
+  }
+
+  @Get("cms/pages")
+  getPublicPagesList(@Query("lang") lang?: string) {
+    return {
+      success: true,
+      data: this.cmsService.getAllPages(lang || "en"),
+    };
+  }
+
+  @Post("cms/contact")
+  submitContactForm(@Body() body: { name: string; email: string; phone?: string; subject?: string; message: string }) {
+    return {
+      success: true,
+      data: this.cmsService.submitContactMessage(body),
+    };
+  }
+
+  @Post("contact")
+  submitContactFormShort(@Body() body: { name: string; email: string; phone?: string; subject?: string; message: string }) {
+    return {
+      success: true,
+      data: this.cmsService.submitContactMessage(body),
+    };
+  }
 }
