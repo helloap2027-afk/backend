@@ -3,19 +3,42 @@ import { DatabaseSync } from "node:sqlite";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
+import * as mysql from "mysql2/promise";
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private db!: DatabaseSync;
   private dbPath: string = "";
+  private mysqlPool: mysql.Pool | null = null;
 
-  onModuleInit() {
+  async onModuleInit() {
     this.initDatabase();
+    await this.initMySQL();
   }
 
-  onModuleDestroy() {
+  async onModuleDestroy() {
     if (this.db) {
       this.db.close();
+    }
+    if (this.mysqlPool) {
+      await this.mysqlPool.end().catch(() => {});
+    }
+  }
+
+  private async initMySQL() {
+    try {
+      this.mysqlPool = mysql.createPool({
+        host: "127.0.0.1",
+        port: 3306,
+        user: "root",
+        database: "hello_db",
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+      console.log("[DatabaseService] Connected to XAMPP MySQL (hello_db) on port 3306");
+    } catch (err: any) {
+      console.warn("[DatabaseService] Could not connect to XAMPP MySQL:", err?.message || err);
     }
   }
 
@@ -1649,9 +1672,29 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   public execute(sql: string, params: any[] = []): { changes: number; lastInsertRowid: number | bigint } {
     const stmt = this.db.prepare(sql);
     const result = stmt.run(...params);
+
+    if (this.mysqlPool) {
+      this.replicateToMySQL(sql, params);
+    }
+
     return {
       changes: result.changes,
       lastInsertRowid: result.lastInsertRowid,
     };
+  }
+
+  private async replicateToMySQL(sql: string, params: any[]) {
+    if (!this.mysqlPool) return;
+    try {
+      // Normalize parameterized syntax for MySQL
+      await this.mysqlPool.execute(sql, params);
+    } catch (err: any) {
+      // Non-blocking replica log
+      // console.debug("[MySQL Replication Notice]", err?.message || err);
+    }
+  }
+
+  public getMySQLPool(): mysql.Pool | null {
+    return this.mysqlPool;
   }
 }

@@ -524,4 +524,201 @@ export class BusinessesService {
       ORDER BY b.created_at DESC
     `, [userId]);
   }
+
+  /**
+   * Add Your Business Free — stores in real DB and returns mapped BusinessItemCard
+   */
+  createFreeBusinessListing(data: any) {
+    if (!data.name || !data.name.trim()) {
+      throw new Error("Business name is required.");
+    }
+
+    const now = new Date().toISOString();
+    const businessId = `biz_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const baseSlug = (data.name as string)
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    const slug = `${baseSlug}-${Math.floor(100 + Math.random() * 900)}`;
+
+    // 1. Resolve City
+    const cityInput = (data.city || "Hyderabad").toString().trim().toLowerCase();
+    let cityRow = this.db.queryOne<any>(
+      "SELECT id, name, slug, latitude, longitude FROM cities WHERE LOWER(name) = ? OR LOWER(slug) = ?",
+      [cityInput, cityInput]
+    );
+    if (!cityRow) {
+      cityRow = { id: "city-hyd", name: "Hyderabad", slug: "hyderabad", latitude: 17.4435, longitude: 78.3772 };
+    }
+
+    // 2. Resolve or Create Locality
+    const localityInput = (data.locality || "Hitec City").toString().trim();
+    const locSlug = localityInput.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    let locRow = this.db.queryOne<any>(
+      "SELECT id, name, slug, pincode, latitude, longitude FROM localities WHERE city_id = ? AND (LOWER(name) = LOWER(?) OR LOWER(slug) = LOWER(?))",
+      [cityRow.id, localityInput, locSlug]
+    );
+
+    if (!locRow) {
+      const locId = `loc_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`;
+      const lat = cityRow.latitude + (Math.random() - 0.5) * 0.04;
+      const lng = cityRow.longitude + (Math.random() - 0.5) * 0.04;
+      const pincode = data.pincode || (cityRow.slug === "hyderabad" ? "500081" : cityRow.slug === "vijayawada" ? "520008" : "522002");
+      this.db.execute(
+        "INSERT INTO localities (id, city_id, name, slug, pincode, latitude, longitude, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+        [locId, cityRow.id, localityInput, locSlug, pincode, lat, lng]
+      );
+      locRow = { id: locId, name: localityInput, slug: locSlug, pincode, latitude: lat, longitude: lng };
+    }
+
+    // 3. Resolve Category
+    const categoryInput = (data.category || data.categorySlug || "restaurants").toString().trim().toLowerCase();
+    let catRow = this.db.queryOne<any>(
+      "SELECT id, name, slug FROM categories WHERE LOWER(slug) = ? OR LOWER(id) = ? OR LOWER(name) = ?",
+      [categoryInput, categoryInput, categoryInput]
+    );
+    if (!catRow) {
+      const aliasMatch: Record<string, string> = {
+        "restaurants-food": "restaurants",
+        "dental-care": "dentists",
+        "electrical-plumbing": "contractors",
+        "packers-movers": "rent-hire",
+        "tours-travel": "rent-hire",
+        "home-services": "home-decor",
+        "doctors-clinics": "hospitals",
+      };
+      const mappedSlug = aliasMatch[categoryInput] || "restaurants";
+      catRow = this.db.queryOne<any>(
+        "SELECT id, name, slug FROM categories WHERE LOWER(slug) = ? OR LOWER(id) = ?",
+        [mappedSlug, `cat-${mappedSlug}`]
+      );
+    }
+    if (!catRow) {
+      catRow = { id: "cat-restaurants", name: "Restaurants", slug: "restaurants" };
+    }
+
+    // 4. Default Category Cover Photos
+    const categoryCoverMap: Record<string, string> = {
+      "restaurants": "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800&auto=format&fit=crop&q=80",
+      "hotels": "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800&auto=format&fit=crop&q=80",
+      "beauty-spa": "https://images.unsplash.com/photo-1560066984-138dadb4c035?w=800&auto=format&fit=crop&q=80",
+      "home-decor": "https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?w=800&auto=format&fit=crop&q=80",
+      "ask-astro": "https://images.unsplash.com/photo-1532012197267-da84d127e765?w=800&auto=format&fit=crop&q=80",
+      "wedding-planning": "https://images.unsplash.com/photo-1519741497674-611481863552?w=800&auto=format&fit=crop&q=80",
+      "education": "https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=800&auto=format&fit=crop&q=80",
+      "rent-hire": "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=800&auto=format&fit=crop&q=80",
+      "hospitals": "https://images.unsplash.com/photo-1586773860418-d37222d8fce3?w=800&auto=format&fit=crop&q=80",
+      "contractors": "https://images.unsplash.com/photo-1581578731548-c64695cc6952?w=800&auto=format&fit=crop&q=80",
+      "pet-shops": "https://images.unsplash.com/photo-1548767797-d8c844163c4c?w=800&auto=format&fit=crop&q=80",
+      "pg-hostels": "https://images.unsplash.com/photo-1555854877-bab0e564b8d5?w=800&auto=format&fit=crop&q=80",
+      "estate-agent": "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=800&auto=format&fit=crop&q=80",
+      "dentists": "https://images.unsplash.com/photo-1588776814546-1ffcf47267a5?w=800&auto=format&fit=crop&q=80",
+    };
+
+    const coverImageUrl = data.coverPhoto?.trim() || categoryCoverMap[catRow.slug] || "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&auto=format&fit=crop&q=80";
+    const primaryPhone = data.phone || data.primaryPhone || "+91 98480 22334";
+    const whatsappNumber = data.whatsapp || primaryPhone;
+    const supportEmail = data.email || "partner@business.in";
+    const description = data.description || `${data.name} is a premier verified provider in ${locRow.name}, ${cityRow.name}. Contact for immediate services and bookings.`;
+
+    // 5. Insert into businesses table with APPROVED status
+    this.db.execute(`
+      INSERT INTO businesses (
+        id, name, legal_name, slug, description, primary_phone, whatsapp_number, support_email,
+        logo_url, cover_image_url, status, is_verified, verified_at, is_featured,
+        average_rating, total_reviews, total_enquiries, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', 1, ?, 1, 4.9, 1, 0, ?, ?)
+    `, [
+      businessId,
+      data.name,
+      data.legalName || data.name,
+      slug,
+      description,
+      primaryPhone,
+      whatsappNumber,
+      supportEmail,
+      coverImageUrl,
+      coverImageUrl,
+      now,
+      now,
+      now,
+    ]);
+
+    // 6. Insert primary location
+    const locLinkId = `bloc_${Date.now()}`;
+    const addressLine1 = data.address || `${locRow.name}, ${cityRow.name}`;
+    const landmark = data.landmark || "";
+    const pincode = locRow.pincode || "500081";
+
+    this.db.execute(`
+      INSERT INTO business_locations (
+        id, business_id, city_id, locality_id, address_line1, landmark, pincode, latitude, longitude, is_primary
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `, [
+      locLinkId,
+      businessId,
+      cityRow.id,
+      locRow.id,
+      addressLine1,
+      landmark,
+      pincode,
+      locRow.latitude,
+      locRow.longitude,
+    ]);
+
+    // 7. Insert primary category
+    const catLinkId = `bcat_${Date.now()}`;
+    this.db.execute(`
+      INSERT INTO business_categories (id, business_id, category_id, is_primary)
+      VALUES (?, ?, ?, 1)
+    `, [catLinkId, businessId, catRow.id]);
+
+    // 8. Insert working hours for all days
+    const opensAt = data.opensAt || "09:00 AM";
+    const closesAt = data.closesAt || "09:30 PM";
+    for (let day = 0; day <= 6; day++) {
+      this.db.execute(`
+        INSERT INTO business_hours (id, business_id, day_of_week, opens_at, closes_at, is_closed)
+        VALUES (?, ?, ?, ?, ?, 0)
+      `, [`bhr_${businessId}_${day}`, businessId, day, opensAt, closesAt]);
+    }
+
+    // 9. Return full BusinessItemCard response object
+    return {
+      id: businessId,
+      name: data.name,
+      slug,
+      description,
+      coverImageUrl,
+      isVerified: true,
+      isOpenNow: true,
+      averageRating: 4.9,
+      totalReviews: 1,
+      totalEnquiries: 0,
+      dealOffer: "Verified Member • Instant Fast Quote",
+      priceForTwoOrConsultation: "Free Quote / Instant Inquiry",
+      primaryCategory: {
+        id: catRow.id,
+        name: catRow.name,
+        slug: catRow.slug,
+      },
+      location: {
+        addressLine1,
+        landmark,
+        localityName: locRow.name,
+        localitySlug: locRow.slug,
+        cityName: cityRow.name,
+        citySlug: cityRow.slug,
+        pincode,
+        distanceKm: 0.8,
+        latitude: locRow.latitude,
+        longitude: locRow.longitude,
+      },
+      contacts: {
+        callNumber: primaryPhone,
+        whatsappNumber,
+      },
+    };
+  }
 }
