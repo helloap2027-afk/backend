@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
-import { calculateHaversineDistanceKm, generateSlug } from "@hello/utils";
-import { isValidCoordinates, isValidPincode } from "@hello/validation";
+import { calculateHaversineDistanceKm, generateSlug, isValidCoordinates, isValidPincode } from "../common/utils";
+
 import * as crypto from "node:crypto";
 
 export interface GeoLocationResult {
@@ -64,6 +64,24 @@ export class LocationsService {
       "SELECT * FROM localities WHERE city_id = ? AND is_active = 1 ORDER BY name ASC",
       [cityId]
     );
+  }
+
+  getLocalitiesByCityQuery(cityQuery: string) {
+    if (!cityQuery || !cityQuery.trim()) {
+      return this.db.query("SELECT * FROM localities WHERE is_active = 1 ORDER BY name ASC LIMIT 50");
+    }
+    const q = cityQuery.trim().toLowerCase();
+    const cityRow = this.db.queryOne<any>(
+      "SELECT id FROM cities WHERE LOWER(name) = ? OR LOWER(slug) = ? OR id = ?",
+      [q, q, cityQuery.trim()]
+    );
+    if (!cityRow) {
+      return this.db.query(
+        "SELECT l.* FROM localities l JOIN cities c ON l.city_id = c.id WHERE LOWER(c.name) LIKE ? AND l.is_active = 1 ORDER BY l.name ASC",
+        ['%' + q + '%']
+      );
+    }
+    return this.getLocalities(cityRow.id);
   }
 
   /**

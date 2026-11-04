@@ -43,10 +43,36 @@ export class CmsService {
     }));
   }
 
+  public resolveCanonicalSlug(slug: string): string {
+    const s = (slug || "").toLowerCase().trim();
+    const aliasMap: Record<string, string> = {
+      contact: "contact-support",
+      "contact-us": "contact-support",
+      support: "contact-support",
+      terms: "terms-and-conditions",
+      "terms-and-conditions": "terms-and-conditions",
+      "terms-conditions": "terms-and-conditions",
+      faq: "faqs",
+      faqs: "faqs",
+      about: "about-us",
+      "about-us": "about-us",
+      privacy: "privacy-policy",
+      "privacy-policy": "privacy-policy",
+      refund: "refund-cancellation-policy",
+      "refund-cancellation-policy": "refund-cancellation-policy",
+      cookie: "cookie-policy",
+      "cookie-policy": "cookie-policy",
+      community: "community-guidelines",
+      "community-guidelines": "community-guidelines",
+    };
+    return aliasMap[s] || s;
+  }
+
   getPageBySlug(slug: string, lang: string = "en") {
+    const targetSlug = this.resolveCanonicalSlug(slug);
     let page = this.db.queryOne<any>(
       `SELECT * FROM cms_pages WHERE slug = ? AND language = ?`,
-      [slug, lang]
+      [targetSlug, lang]
     );
 
     // If requested language translation not found, attempt fallback to English
@@ -54,7 +80,7 @@ export class CmsService {
     if (!page && lang !== "en") {
       page = this.db.queryOne<any>(
         `SELECT * FROM cms_pages WHERE slug = ? AND language = 'en'`,
-        [slug]
+        [targetSlug]
       );
       if (page) isFallback = true;
     }
@@ -605,15 +631,16 @@ export class CmsService {
 
   // Read-only public content endpoint
   getPublicPage(slug: string, lang: string = "en") {
+    const targetSlug = this.resolveCanonicalSlug(slug);
     let page = this.db.queryOne<any>(
       `SELECT * FROM cms_pages WHERE slug = ? AND language = ?`,
-      [slug, lang]
+      [targetSlug, lang]
     );
 
     if (!page && lang !== "en") {
       page = this.db.queryOne<any>(
         `SELECT * FROM cms_pages WHERE slug = ? AND language = 'en'`,
-        [slug]
+        [targetSlug]
       );
     }
 
@@ -703,5 +730,30 @@ export class CmsService {
         now,
       ]
     );
+  }
+
+  submitContactMessage(data: { name: string; email: string; phone?: string; subject?: string; message: string }) {
+    if (!data.name || !data.email || !data.message) {
+      throw new BadRequestException("Name, email, and message are required.");
+    }
+    const id = `cnt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    this.db.execute(`
+      INSERT INTO contact_submissions (id, full_name, email, phone, subject, message, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?)
+    `, [
+      id,
+      data.name.trim(),
+      data.email.trim(),
+      data.phone?.trim() || null,
+      data.subject?.trim() || "General Enquiry",
+      data.message.trim(),
+      now
+    ]);
+    return {
+      id,
+      message: "Your message has been received by Hello-Hi Support. Our team will get back to you shortly.",
+      createdAt: now
+    };
   }
 }

@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, ensureSqlJs } from "../types/sqlite-compat";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
@@ -10,8 +10,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private db!: DatabaseSync;
   private dbPath: string = "";
   private mysqlPool: mysql.Pool | null = null;
+  private isSyncingFromMySQL = false;
 
   async onModuleInit() {
+    await ensureSqlJs();
     this.initDatabase();
     await this.initMySQL();
   }
@@ -37,8 +39,61 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         queueLimit: 0,
       });
       console.log("[DatabaseService] Connected to XAMPP MySQL (hello_db) on port 3306");
+      await this.syncFromMySQL();
     } catch (err: any) {
       console.warn("[DatabaseService] Could not connect to XAMPP MySQL:", err?.message || err);
+    }
+  }
+
+  
+  public async syncFromMySQL() {
+    if (!this.mysqlPool) return;
+    this.isSyncingFromMySQL = true;
+    try {
+      this.execute("PRAGMA foreign_keys = OFF;");
+      const tables = [
+        "states", "districts", "cities", "localities", "categories", "services",
+        "users", "roles", "user_permissions", "user_sessions", "admin_preferences",
+        "businesses", "business_categories", "business_locations", "business_hours",
+        "business_owners", "business_media", "business_staff", "enquiries", "enquiry_events",
+        "reviews", "saved_businesses", "cms_pages", "cms_revisions", "cms_audit_logs",
+        "contact_submissions", "audit_logs", "payments", "subscription_plans",
+        "subscriptions", "notifications", "wallet_transactions", "withdrawals",
+        "auth_mfa_challenges", "ad_campaigns", "coupons", "coupon_redemptions",
+        "in_app_notifications", "push_templates", "normal_push_logs",
+        "business_kyc_documents"
+      ];
+
+      for (const table of tables) {
+        try {
+          const [rows] = await this.mysqlPool.query<any[]>(`SELECT * FROM ${table}`);
+          if (Array.isArray(rows) && rows.length > 0) {
+            this.execute(`DELETE FROM ${table}`);
+            const cols = Object.keys(rows[0]);
+            const placeholders = cols.map(() => "?").join(", ");
+            const sql = `INSERT OR REPLACE INTO ${table} (${cols.join(", ")}) VALUES (${placeholders})`;
+            for (const row of rows) {
+              const vals = cols.map((c) => {
+                const val = row[c];
+                if (val instanceof Date) return val.toISOString();
+                if (typeof val === "object" && val !== null) return JSON.stringify(val);
+                return val;
+              });
+              this.execute(sql, vals);
+            }
+          }
+        } catch (tableErr: any) {
+          // ignore table error
+        }
+      }
+
+      this.execute("PRAGMA foreign_keys = ON;");
+      const bCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM businesses");
+      console.log(`[DatabaseService] Synced ${bCount?.c || 0} businesses and all records from MySQL hello_db into active memory!`);
+    } catch (err: any) {
+      console.warn("[DatabaseService] Failed syncing from MySQL:", err?.message || err);
+    } finally {
+      this.isSyncingFromMySQL = false;
     }
   }
 
@@ -58,6 +113,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.db.exec("PRAGMA foreign_keys = ON;");
 
     this.createTables();
+    try { this.db.exec("ALTER TABLE businesses ADD COLUMN business_type TEXT DEFAULT 'Sole Proprietor';"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'English';"); } catch {}
+    try { this.db.exec("ALTER TABLE otp_challenges ADD COLUMN role TEXT DEFAULT 'CUSTOMER';"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_type TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_number TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_file_url TEXT;"); } catch {}
     this.seedDefaults();
   }
 
@@ -71,6 +132,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         avatar_url TEXT,
         password_hash TEXT,
         preferred_language TEXT DEFAULT 'English',
+        identity_proof_type TEXT,
+        identity_proof_number TEXT,
         status TEXT NOT NULL DEFAULT 'ACTIVE',
         phone_verified_at TEXT,
         created_at TEXT NOT NULL,
@@ -95,6 +158,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         otp_code_hash TEXT NOT NULL,
         attempts_count INTEGER NOT NULL DEFAULT 0,
         purpose TEXT NOT NULL DEFAULT 'LOGIN',
+        role TEXT DEFAULT 'CUSTOMER',
         expires_at TEXT NOT NULL,
         verified_at TEXT,
         created_at TEXT NOT NULL
@@ -187,6 +251,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         legal_name TEXT,
+        business_type TEXT DEFAULT 'Sole Proprietor',
         slug TEXT UNIQUE NOT NULL,
         description TEXT,
         primary_phone TEXT NOT NULL,
@@ -201,6 +266,29 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         average_rating REAL NOT NULL DEFAULT 0.0,
         total_reviews INTEGER NOT NULL DEFAULT 0,
         total_enquiries INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS business_kyc_documents (
+        id TEXT PRIMARY KEY,
+        business_id TEXT NOT NULL,
+        user_id TEXT,
+        document_category TEXT NOT NULL DEFAULT 'BUSINESS_PROOF',
+        document_type TEXT NOT NULL,
+        document_number TEXT,
+        issuing_authority TEXT,
+        issue_date TEXT,
+        expiry_date TEXT,
+        file_url TEXT,
+        file_name TEXT,
+        file_size INTEGER,
+        mime_type TEXT,
+        has_no_document INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        admin_remarks TEXT,
+        verified_at TEXT,
+        verified_by TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -403,6 +491,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         timestamp TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS contact_submissions (
+        id TEXT PRIMARY KEY,
+        full_name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT,
+        subject TEXT,
+        message TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'NEW',
+        created_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_cms_page_lookup ON cms_pages(slug, language);
       CREATE INDEX IF NOT EXISTS idx_cms_rev_page ON cms_revisions(page_id, revision_number);
       CREATE INDEX IF NOT EXISTS idx_cms_audit_slug ON cms_audit_logs(page_slug, timestamp);
@@ -486,6 +585,36 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       CREATE INDEX IF NOT EXISTS idx_notif_type ON notifications(type);
       CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at);
 
+      
+      -- =========================================================================
+      -- WALLET TRANSACTIONS & WITHDRAWALS SCHEMA
+      -- =========================================================================
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        id TEXT PRIMARY KEY,
+        wallet_id TEXT NOT NULL,
+        user_name TEXT NOT NULL,
+        user_type TEXT NOT NULL,
+        type TEXT NOT NULL,
+        amount REAL NOT NULL,
+        balance_after REAL NOT NULL,
+        reference TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS withdrawals (
+        id TEXT PRIMARY KEY,
+        merchant_id TEXT NOT NULL,
+        merchant_name TEXT NOT NULL,
+        amount REAL NOT NULL,
+        bank_account TEXT NOT NULL,
+        ifsc_code TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payout_ref TEXT,
+        requested_at TEXT NOT NULL,
+        processed_at TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS auth_mfa_challenges (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -496,7 +625,117 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at TEXT NOT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
-    `);
+    
+      CREATE TABLE IF NOT EXISTS ad_campaigns (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        ad_title TEXT NOT NULL,
+        notification_title TEXT NOT NULL,
+        notification_body TEXT NOT NULL,
+        subtitle TEXT,
+        banner_url TEXT,
+        category TEXT,
+        priority TEXT DEFAULT 'NORMAL',
+        target_audience TEXT DEFAULT 'ALL',
+        target_city TEXT DEFAULT 'All',
+        target_locality TEXT,
+        destination_type TEXT DEFAULT 'APP_SCREEN',
+        destination_url TEXT,
+        scheduled_at TEXT,
+        status TEXT DEFAULT 'DRAFT',
+        target_count INTEGER DEFAULT 0,
+        eligible_count INTEGER DEFAULT 0,
+        sent_count INTEGER DEFAULT 0,
+        failed_count INTEGER DEFAULT 0,
+        created_by TEXT DEFAULT 'Super Admin',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS coupons (
+        id TEXT PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        terms TEXT,
+        banner_url TEXT,
+        category TEXT DEFAULT 'All',
+        discount_type TEXT NOT NULL,
+        discount_value REAL NOT NULL,
+        min_order_value REAL DEFAULT 0,
+        max_discount REAL DEFAULT 0,
+        usage_limit INTEGER DEFAULT 1000,
+        per_user_limit INTEGER DEFAULT 1,
+        redemption_count INTEGER DEFAULT 0,
+        applicable_city TEXT DEFAULT 'All',
+        applicable_category TEXT DEFAULT 'All',
+        valid_from TEXT NOT NULL,
+        valid_until TEXT NOT NULL,
+        status TEXT DEFAULT 'ACTIVE',
+        created_by TEXT DEFAULT 'Super Admin',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS coupon_redemptions (
+        id TEXT PRIMARY KEY,
+        coupon_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        user_name TEXT,
+        order_value REAL NOT NULL,
+        discount_applied REAL NOT NULL,
+        order_reference TEXT,
+        redeemed_at TEXT NOT NULL,
+        FOREIGN KEY (coupon_id) REFERENCES coupons(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS in_app_notifications (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        category TEXT DEFAULT 'ANNOUNCEMENT',
+        banner_url TEXT,
+        target_audience TEXT DEFAULT 'ALL',
+        target_city TEXT DEFAULT 'All',
+        destination_url TEXT,
+        priority TEXT DEFAULT 'NORMAL',
+        scheduled_at TEXT,
+        expires_at TEXT,
+        status TEXT DEFAULT 'PUBLISHED',
+        read_count INTEGER DEFAULT 0,
+        created_by TEXT DEFAULT 'Super Admin',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS push_templates (
+        id TEXT PRIMARY KEY,
+        event_type TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        title_template TEXT NOT NULL,
+        body_template TEXT NOT NULL,
+        destination_url TEXT,
+        status TEXT DEFAULT 'ACTIVE',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS normal_push_logs (
+        id TEXT PRIMARY KEY,
+        notification_ref TEXT UNIQUE NOT NULL,
+        event_type TEXT NOT NULL,
+        recipient_type TEXT NOT NULL,
+        recipient_id TEXT,
+        recipient_phone TEXT,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        destination_url TEXT,
+        delivery_status TEXT NOT NULL DEFAULT 'DELIVERED',
+        error_reason TEXT,
+        created_at TEXT NOT NULL,
+        sent_at TEXT NOT NULL
+      );
+
+`);
 
     // Safe dynamic column migrations for existing SQLite databases
     try {
@@ -513,46 +752,56 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private seedDefaults() {
     const now = new Date().toISOString();
 
-    // 1. Roles
-    const rolesCount = this.db.prepare("SELECT COUNT(*) as count FROM roles").get() as { count: number };
-    if (rolesCount.count === 0) {
-      const insertRole = this.db.prepare("INSERT INTO roles (id, name, description) VALUES (?, ?, ?)");
-      insertRole.run("role-cust", "CUSTOMER", "Consumer discovering local businesses and sending leads");
-      insertRole.run("role-owner", "VENDOR_OWNER", "Business owner with full rights over business profiles and staff");
-      insertRole.run("role-staff", "VENDOR_STAFF", "Business staff managing assigned leads");
-      insertRole.run("role-superadmin", "SUPER_ADMIN", "Platform root administrative privileges");
-    }
+    // 1. Roles - Always guarantee core system roles exist
+    const insertRole = this.db.prepare("INSERT OR IGNORE INTO roles (id, name, description) VALUES (?, ?, ?)");
+    insertRole.run("role-cust", "CUSTOMER", "Consumer discovering local businesses and sending leads");
+    insertRole.run("role-owner", "VENDOR_OWNER", "Business owner with full rights over business profiles and staff");
+    insertRole.run("role-staff", "VENDOR_STAFF", "Business staff managing assigned leads");
+    insertRole.run("role-superadmin", "SUPER_ADMIN", "Platform root administrative privileges");
 
     // 1b. Default Super Administrator
-    const superAdmin = this.db.prepare("SELECT * FROM users WHERE email = ?").get("admin@hello-hi.in") as any;
+    let superAdmin = this.db.prepare("SELECT * FROM users WHERE id = 'usr_super_admin' OR email = 'admin@hello-hi.in'").get() as any;
     if (!superAdmin) {
-      this.db.prepare(`
-        INSERT OR IGNORE INTO users (id, phone_number, full_name, email, avatar_url, status, phone_verified_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "usr_super_admin",
-        "+919848012345",
-        "Admin User",
-        "admin@hello-hi.in",
-        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-        "ACTIVE",
-        now,
-        now,
-        now
-      );
+      try {
+        this.db.prepare(`
+          INSERT OR IGNORE INTO users (id, phone_number, full_name, email, avatar_url, status, phone_verified_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          "usr_super_admin",
+          "+919848000001",
+          "Admin User",
+          "admin@hello-hi.in",
+          "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
+          "ACTIVE",
+          now,
+          now,
+          now
+        );
+      } catch (err) {
+        console.warn("[DatabaseService] Warning inserting default super admin:", (err as Error).message);
+      }
+    }
+    const superAdminRef = (this.db.prepare("SELECT id FROM users WHERE email = 'admin@hello-hi.in' OR id = 'usr_super_admin'").get() as any) || { id: "usr_super_admin" };
+    try {
       this.db.prepare(`
         INSERT OR IGNORE INTO user_permissions (id, user_id, role_id)
-        VALUES (?, ?, ?)
-      `).run("perm-superadmin", "usr_super_admin", "role-superadmin");
+        VALUES (?, ?, 'role-superadmin')
+      `).run(`perm-${superAdminRef.id}`, superAdminRef.id);
+    } catch (e) {
+      console.warn("[DatabaseService] user_permissions seed note:", (e as Error).message);
+    }
+    try {
       this.db.prepare(`
         INSERT OR IGNORE INTO admin_preferences (user_id, language, email_notifications, sms_alerts, two_factor_auth, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run("usr_super_admin", "English", 1, 1, 0, now);
+      `).run(superAdminRef.id, "English", 1, 1, 0, now);
+    } catch (e) {
+      console.warn("[DatabaseService] admin_preferences seed note:", (e as Error).message);
     }
 
     // Ensure default Super Admin has scrypt-hashed password
-    const adminUser = this.db.prepare("SELECT * FROM users WHERE email = ?").get("admin@hello-hi.in") as any;
-    if (adminUser && (!adminUser.password_hash || adminUser.password_hash.trim() === "")) {
+    const existingAdmin = this.db.prepare("SELECT * FROM users WHERE email = ?").get("admin@hello-hi.in") as any;
+    if (existingAdmin && (!existingAdmin.password_hash || existingAdmin.password_hash.trim() === "")) {
       const salt = "4a9b2c8f1e6d3a7c";
       const hash = crypto.scryptSync("admin123", salt, 64).toString("hex");
       this.db.prepare("UPDATE users SET password_hash = ? WHERE email = ?").run(`${salt}:${hash}`, "admin@hello-hi.in");
@@ -658,10 +907,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!defaultVendor) {
       const vendorId = "user-vendor-pilot";
       this.db.prepare(
-        "INSERT INTO users (id, phone_number, full_name, email, status, phone_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?)"
+        "INSERT OR IGNORE INTO users (id, phone_number, full_name, email, status, phone_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?)"
       ).run(vendorId, "+919848099999", "Ramesh Kumar (Pilot Partner)", "ramesh.kumar@hello-hi.in", now, now, now);
       this.db.prepare(
-        "INSERT INTO user_permissions (id, user_id, role_id) VALUES (?, ?, 'role-owner')"
+        "INSERT OR IGNORE INTO user_permissions (id, user_id, role_id) VALUES (?, ?, 'role-owner')"
       ).run("perm-vendor-pilot", vendorId);
       defaultVendor = { id: vendorId };
     }
@@ -1309,9 +1558,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Seed 8 Standard Hello-Hi CMS Pages
-    if (true) {
+    const existingCmsPages = this.query<{ count: number }>("SELECT COUNT(*) as count FROM cms_pages");
+    if (!existingCmsPages || existingCmsPages[0]?.count === 0) {
       const insertPage = this.db.prepare(`
-        INSERT INTO cms_pages (
+        INSERT OR IGNORE INTO cms_pages (
           id, slug, language, title, short_description, content, faq_items_json,
           status, visibility, published_revision_id, meta_title, meta_description,
           canonical_url, robots_index, og_title, og_description, og_image,
@@ -1320,7 +1570,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `);
 
       const insertRevision = this.db.prepare(`
-        INSERT INTO cms_revisions (
+        INSERT OR IGNORE INTO cms_revisions (
           id, page_id, page_slug, language, revision_number, title, short_description,
           content, faq_items_json, seo_json, status, change_summary,
           created_by, created_at
@@ -1328,7 +1578,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `);
 
       const insertAudit = this.db.prepare(`
-        INSERT INTO cms_audit_logs (
+        INSERT OR IGNORE INTO cms_audit_logs (
           id, page_slug, language, action, previous_status, new_status,
           performed_by, performed_by_role, details, timestamp
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1641,6 +1891,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
+      
+    try {
+      this.db.exec(`
+        INSERT OR IGNORE INTO push_templates (id, event_type, name, title_template, body_template, destination_url, status, created_at, updated_at) VALUES
+        ('tmpl_1', 'REFERRAL_REWARD_GRANTED', 'Referral Reward Credited', 'Congratulations! You earned ₹{{reward_amount}}', 'Your referral {{referee_name}} joined Hello! Bonus credited to your wallet.', 'wallet', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_2', 'BUSINESS_LISTING_APPROVED', 'Business Listing Approved', 'Your business {{business_name}} is now live!', 'Customers in {{city}} can now find your services and place enquiries directly.', 'business/profile', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_3', 'NEW_ENQUIRY_RECEIVED', 'New Customer Enquiry', 'New enquiry for {{service_name}}!', 'A customer in {{locality}} requested a callback. Open enquiry to respond.', 'enquiries', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_4', 'BUSINESS_VERIFICATION_COMPLETED', 'KYC Verification Completed', 'Your documents have been verified!', 'Your verified badge is now active on your store listing.', 'business/kyc', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_5', 'ACCOUNT_STATUS_CHANGED', 'Account Security Alert', 'Security status update for your account', 'Your account settings were updated on {{timestamp}} from {{device}}.', 'profile/security', 'ACTIVE', datetime('now'), datetime('now'));
+      INSERT OR IGNORE INTO normal_push_logs (id, notification_ref, event_type, recipient_type, recipient_id, recipient_phone, title, message, destination_url, delivery_status, created_at, sent_at) VALUES
+      ('npl_1', 'PUSH-TXN-98210', 'NEW_ENQUIRY_RECEIVED', 'BUSINESS', 'biz-amravati', '+919848011111', 'New Customer Enquiry for Amravati Grand Restaurant!', 'A customer in your service area requested a callback. Open enquiry to respond.', 'enquiries', 'DELIVERED', datetime('now', '-1 hours'), datetime('now', '-1 hours')),
+      ('npl_2', 'PUSH-TXN-98211', 'BUSINESS_LISTING_APPROVED', 'MERCHANT', 'biz-siri-dental', '+919848022222', 'Your business Siri Dental Clinic is now live!', 'Customers in Vijayawada can now find your services and place enquiries directly.', 'business/profile', 'DELIVERED', datetime('now', '-3 hours'), datetime('now', '-3 hours')),
+      ('npl_3', 'PUSH-TXN-98212', 'REFERRAL_REWARD_GRANTED', 'CUSTOMER', 'user-cust-102', '+919848033333', 'Congratulations! You earned ₹150', 'Your referral Ravi Kumar joined Hello! Bonus credited to your wallet.', 'wallet', 'DELIVERED', datetime('now', '-5 hours'), datetime('now', '-5 hours')),
+      ('npl_4', 'PUSH-TXN-98213', 'BUSINESS_VERIFICATION_COMPLETED', 'MERCHANT', 'biz-amravati', '+919848011111', 'KYC Verification Completed', 'Your verified badge is now active on your store listing.', 'business/kyc', 'DELIVERED', datetime('now', '-1 days'), datetime('now', '-1 days')),
+      ('npl_5', 'PUSH-TXN-98214', 'ACCOUNT_STATUS_CHANGED', 'CUSTOMER', 'user-cust-105', '+919848044444', 'Security status update for your account', 'Your account settings were updated on today from Chrome Mobile.', 'profile/security', 'DELIVERED', datetime('now', '-2 days'), datetime('now', '-2 days'));
+    
+      `);
+    } catch {}
+  
+
+
+      
+
+
       const sampleNotifs = [
         { id: "notif_001", title: "4 New Merchant KYC Submissions", message: "Vijayawada & Guntur vendors submitted documents for verification.", type: "KYC_VERIFICATION", isRead: 0, entity: "businesses", refId: "queue-1", date: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
         { id: "notif_002", title: "Monthly Revenue Milestone Crossed", message: "Platform subscription collections crossed ₹18,45,200 benchmark target.", type: "FINANCIAL", isRead: 0, entity: "subscriptions", refId: "sub_101", date: new Date(Date.now() - 60 * 60 * 1000).toISOString() },
@@ -1655,6 +1929,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       for (const n of sampleNotifs) {
         insertNotif.run(n.id, n.title, n.message, n.type, "Super Admin", n.isRead, n.entity, n.refId, n.date, n.isRead ? n.date : null);
       }
+    }
+  
+
+    // 9. Wallet Transactions
+    const txCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM wallet_transactions");
+    if (!txCount || txCount.c === 0) {
+      const insertTx = this.db.prepare(
+        "INSERT INTO wallet_transactions (id, wallet_id, user_name, user_type, type, amount, balance_after, reference, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      );
+      const nowIso = new Date().toISOString();
+      insertTx.run("wt-001", "WAL-1001", "Vijay Kumar", "CUSTOMER", "CREDIT", 500, 1500, "UPI/2026/89123", "SUCCESS", nowIso);
+      insertTx.run("wt-002", "WAL-1002", "Swagath Grand Hotel", "MERCHANT", "DEBIT", 1200, 4800, "COMMISSION/992", "SUCCESS", nowIso);
+      insertTx.run("wt-003", "WAL-1003", "Sneha Reddy", "CUSTOMER", "REFUND", 250, 750, "REF/882194", "SUCCESS", nowIso);
+      insertTx.run("wt-004", "WAL-1004", "Sai Medicals", "MERCHANT", "WITHDRAWAL", 3000, 2000, "WDL/99012", "PENDING", nowIso);
+    }
+
+    // 10. Withdrawals
+    const wdlCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM withdrawals");
+    if (!wdlCount || wdlCount.c === 0) {
+      const insertWdl = this.db.prepare(
+        "INSERT INTO withdrawals (id, merchant_id, merchant_name, amount, bank_account, ifsc_code, status, payout_ref, requested_at, processed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      );
+      const nowIso = new Date().toISOString();
+      insertWdl.run("wdl-101", "biz-swagath-grand", "Swagath Grand Hotel", 8500, "HDFC0001234 - 501002938192", "HDFC0001234", "APPROVED", "PAYOUT-HDFC-9912", nowIso, nowIso);
+      insertWdl.run("wdl-102", "biz-sai-medicals", "Sai Medical & General Stores", 4200, "SBI0004921 - 20391829481", "SBI0004921", "PENDING", null, nowIso, null);
+      insertWdl.run("wdl-103", "biz-apex-rentals", "Apex Self-Drive Cars", 15000, "ICIC0000832 - 10928374619", "ICIC0000832", "PROCESSING", "PAYOUT-ICICI-1102", nowIso, null);
     }
   }
 
@@ -1684,13 +1984,28 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async replicateToMySQL(sql: string, params: any[]) {
-    if (!this.mysqlPool) return;
+    if (!this.mysqlPool || this.isSyncingFromMySQL) return;
     try {
-      // Normalize parameterized syntax for MySQL
-      await this.mysqlPool.execute(sql, params);
+      const trimmed = sql.trim();
+      // Skip SQLite-specific PRAGMA statements
+      if (trimmed.toUpperCase().startsWith("PRAGMA")) return;
+
+      // Normalize SQLite to MySQL syntax
+      let mysqlSql = trimmed
+        .replace(/INSERT\s+OR\s+REPLACE\s+INTO/gi, "REPLACE INTO")
+        .replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, "INSERT IGNORE INTO")
+        .replace(/datetime\('now'\)/gi, "NOW()");
+
+      // Normalize parameter values for MySQL
+      const mysqlParams = (params || []).map((p) => {
+        if (p === undefined) return null;
+        if (typeof p === "boolean") return p ? 1 : 0;
+        return p;
+      });
+
+      await this.mysqlPool.execute(mysqlSql, mysqlParams);
     } catch (err: any) {
-      // Non-blocking replica log
-      // console.debug("[MySQL Replication Notice]", err?.message || err);
+      console.warn("[MySQL Replication Warning]:", err?.message || err);
     }
   }
 
