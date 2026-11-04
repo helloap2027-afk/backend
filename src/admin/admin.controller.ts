@@ -1,8 +1,15 @@
+<<<<<<< HEAD
 import { Controller, Get, Post, Put, Param, Body, Query, Req, UseGuards } from "@nestjs/common";
 import { AdminService } from "./admin.service";
 import { AuthService } from "../auth/auth.service";
 import { AuthGuard } from "../auth/guards/auth.guard";
 import { CurrentUser } from "../auth/decorators/roles.decorator";
+=======
+import { Controller, Get, Post, Put, Patch, Param, Body, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
+import * as fs from "node:fs";
+import { AdminService } from "./admin.service";
+import { AuthService } from "../auth/auth.service";
+>>>>>>> feature/superadmin
 
 @Controller("admin")
 export class AdminController {
@@ -11,10 +18,43 @@ export class AdminController {
     private readonly authService: AuthService
   ) {}
 
+<<<<<<< HEAD
   @Post("auth/login")
   async adminLogin(@Body() body: any, @Req() req: any) {
     const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "127.0.0.1";
     const data = await this.authService.adminLogin(body.email, body.password, body.deviceInfo, ip);
+=======
+  private extractAdminActor(req: any): string {
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.substring(7);
+      const payload = this.authService.validateUserToken(token);
+      if (!payload.roles?.includes("SUPER_ADMIN") && !payload.roles?.includes("OPERATIONS")) {
+        throw new ForbiddenException("Super Admin authorization required");
+      }
+      return payload.sub;
+    }
+
+    if (process.env.NODE_ENV !== "production") {
+      const devAdminHeader = req.headers["x-admin-id"];
+      if (devAdminHeader) {
+        return devAdminHeader;
+      }
+    }
+
+    throw new UnauthorizedException("Missing or invalid Administrator Bearer token");
+  }
+
+  @Post("auth/login")
+  async adminLogin(@Body() body: any, @Req() req: any) {
+    const ip = req.ip || req.connection?.remoteAddress || "127.0.0.1";
+    const data = await this.authService.adminLogin(
+      body.email,
+      body.password,
+      body.deviceInfo || "Admin Console",
+      ip
+    );
+>>>>>>> feature/superadmin
     return {
       success: true,
       data
@@ -23,14 +63,25 @@ export class AdminController {
 
   @Post("auth/mfa/verify")
   async verifyAdminMfa(@Body() body: any, @Req() req: any) {
+<<<<<<< HEAD
     const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "127.0.0.1";
     const data = await this.authService.verifyAdminMfa(body.mfaChallengeId, body.code, body.deviceInfo, ip);
+=======
+    const ip = req.ip || req.connection?.remoteAddress || "127.0.0.1";
+    const data = await this.authService.verifyAdminMfa(
+      body.mfaChallengeId,
+      body.code,
+      body.deviceInfo || "Admin Console",
+      ip
+    );
+>>>>>>> feature/superadmin
     return {
       success: true,
       data
     };
   }
 
+<<<<<<< HEAD
   @Post("auth/logout")
   @UseGuards(AuthGuard)
   async adminAuthLogout(@CurrentUser("sub") userId: string, @Body() body: any) {
@@ -46,12 +97,114 @@ export class AdminController {
       data
     };
   }
+=======
+  // =========================================================================
+  // CUSTOMERS MANAGEMENT ENDPOINTS
+  // =========================================================================
+
+  @Get("customers")
+  getCustomers(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("status") status?: string
+  ) {
+    const res = this.adminService.getCustomers({ page, pageSize, search, status });
+    return {
+      success: true,
+      ...res,
+    };
+  }
+
+  @Get("customers/:id")
+  getCustomerById(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getCustomerById(id),
+    };
+  }
+
+  @Post("customers/:id/delete")
+  deleteCustomer(@Param("id") id: string) {
+    return this.adminService.deleteCustomer(id);
+  }
+
+  @Post("customers/bulk-delete")
+  bulkDeleteCustomers(@Body() body: { ids: string[] }) {
+    return this.adminService.bulkDeleteCustomers(body.ids);
+  }
+
+  // =========================================================================
+  // MERCHANTS MANAGEMENT ENDPOINTS
+  // =========================================================================
+
+  @Get("merchants")
+  getMerchants(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("status") status?: string,
+    @Query("kyc") kyc?: string
+  ) {
+    const res = this.adminService.getMerchants({ page, pageSize, search, status, kyc });
+    return {
+      success: true,
+      ...res,
+    };
+  }
+
+  @Get("merchants/:id")
+  getMerchantById(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getMerchantById(id),
+    };
+  }
+
+  @Put("merchants/:id")
+  putMerchant(@Param("id") id: string, @Body() body: any) {
+    const data = this.adminService.updateMerchant(id, body);
+    return {
+      success: true,
+      data,
+      message: "Merchant details updated successfully.",
+    };
+  }
+
+  @Patch("merchants/:id")
+  patchMerchant(@Param("id") id: string, @Body() body: any) {
+    const data = this.adminService.updateMerchant(id, body);
+    return {
+      success: true,
+      data,
+      message: "Merchant details updated successfully.",
+    };
+  }
+
+  @Post("merchants/:id/delete")
+  deleteMerchant(@Param("id") id: string) {
+    return this.adminService.deleteMerchant(id);
+  }
+
+  @Post("merchants/bulk-delete")
+  bulkDeleteMerchants(@Body() body: { ids: string[] }) {
+    return this.adminService.bulkDeleteMerchants(body.ids);
+  }
+>>>>>>> feature/superadmin
 
   @Get("dashboard/stats")
   getDashboardStats() {
     return {
       success: true,
       data: this.adminService.getDashboardStats(),
+    };
+  }
+
+  @Get("businesses")
+  getAllBusinesses(@Query() query: any) {
+    return {
+      success: true,
+      data: this.adminService.getAllBusinesses(query),
     };
   }
 
@@ -64,13 +217,42 @@ export class AdminController {
   }
 
   @Post("businesses/:id/approve")
-  approveBusiness(@Param("id") id: string) {
-    return this.adminService.approveBusiness(id);
+  approveBusiness(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.approveBusiness(id, actorId);
   }
 
   @Post("businesses/:id/reject")
-  rejectBusiness(@Param("id") id: string, @Body("reason") reason: string) {
-    return this.adminService.rejectBusiness(id, reason || "Documents failed validation");
+  rejectBusiness(@Param("id") id: string, @Body("reason") reason: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.rejectBusiness(id, reason || "Documents failed validation", actorId);
+  }
+
+  @Post("businesses/:id/suspend")
+  suspendBusiness(@Param("id") id: string, @Body("reason") reason: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.suspendBusiness(id, reason || "Administrative suspension", actorId);
+  }
+
+  @Post("businesses/:id/unpublish")
+  unpublishBusiness(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.unpublishBusiness(id, actorId);
+  }
+
+  @Post("businesses/:id/publish")
+  publishBusiness(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.publishBusiness(id, actorId);
+  }
+
+  @Get("kyc/documents/:documentId/file")
+  getKycDocumentFile(@Param("documentId") documentId: string, @Res() res: any) {
+    const { filePath, mimeType, fileName } = this.adminService.getKycDocumentFile(documentId);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    const stream = fs.createReadStream(filePath);
+    stream.pipe(res);
   }
 
   @Get("audit-logs")

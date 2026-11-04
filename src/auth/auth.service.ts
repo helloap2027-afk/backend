@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
-import { isValidIndianPhone, normalizeIndianPhone, isValidOtp } from "@hello/validation";
-import { APP_CONFIG } from "@hello/config";
+import { isValidIndianPhone, normalizeIndianPhone, isValidOtp, APP_CONFIG } from "../common/utils";
+
 import * as crypto from "node:crypto";
 
 export interface TokenPayload {
@@ -25,12 +25,63 @@ export class AuthService {
   /**
    * 1. Send SMS OTP with sliding-window rate limiting & brute-force prevention
    */
-  async sendOtp(rawPhone: string, purpose = "LOGIN") {
+  async sendOtp(rawPhone: string, purpose = "LOGIN", role?: string) {
     if (!isValidIndianPhone(rawPhone)) {
       throw new BadRequestException("Phone number must be a valid Indian mobile number (+91XXXXXXXXXX)");
     }
 
     const phone = normalizeIndianPhone(rawPhone);
+    const existingUser = this.db.queryOne<any>("SELECT * FROM users WHERE phone_number = ?", [phone]);
+
+    // ─── INDUSTRY-STANDARD STRICT ROLE & REGISTRATION PRE-CHECKS ─────────────
+    if (purpose === "REGISTRATION") {
+      if (existingUser) {
+        const roles = this.getUserRoles(existingUser.id);
+        const businesses = this.getUserBusinesses(existingUser.id);
+        const hasCustomerRole = roles.includes("CUSTOMER");
+        const hasPartnerRole = roles.includes("VENDOR_OWNER") || roles.includes("VENDOR_STAFF") || businesses.length > 0;
+
+        if (role === "PARTNER" || role === "VENDOR_OWNER") {
+          if (hasPartnerRole) {
+            throw new BadRequestException(
+              `Already this account was registered with Business Partner role. Please switch to Sign In.`
+            );
+          }
+        } else {
+          // Default Customer Registration
+          if (hasCustomerRole) {
+            throw new BadRequestException(
+              `Already this account was registered with Customer role. Please switch to Sign In.`
+            );
+          }
+        }
+      }
+    } else if (purpose === "LOGIN") {
+      if (!existingUser) {
+        throw new BadRequestException(
+          `No registered account found for this mobile number. First you register the account before logging in.`
+        );
+      }
+      const roles = this.getUserRoles(existingUser.id);
+      const businesses = this.getUserBusinesses(existingUser.id);
+      const hasCustomerRole = roles.includes("CUSTOMER");
+      const hasPartnerRole = roles.includes("VENDOR_OWNER") || roles.includes("VENDOR_STAFF") || businesses.length > 0;
+
+      if (role === "PARTNER" || role === "VENDOR_OWNER") {
+        if (!hasPartnerRole) {
+          throw new BadRequestException(
+            `This mobile number is registered as a Customer, not a Business Partner. First you register the Business Partner account.`
+          );
+        }
+      } else if (role === "CUSTOMER") {
+        if (!hasCustomerRole) {
+          throw new BadRequestException(
+            `This mobile number is not registered as a Customer. First you register the Customer account.`
+          );
+        }
+      }
+    }
+
     const now = new Date();
     const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000).toISOString();
 
@@ -64,9 +115,9 @@ export class AuthService {
 
     // Store in SQL database
     this.db.execute(
-      `INSERT INTO otp_challenges (id, phone_number, otp_code_hash, attempts_count, purpose, expires_at, created_at)
-       VALUES (?, ?, ?, 0, ?, ?, ?)`,
-      [challengeId, phone, otpHash, purpose, expiresAt, now.toISOString()]
+      `INSERT INTO otp_challenges (id, phone_number, otp_code_hash, attempts_count, purpose, role, expires_at, created_at)
+       VALUES (?, ?, ?, 0, ?, ?, ?, ?)`,
+      [challengeId, phone, otpHash, purpose, (role || "CUSTOMER").toUpperCase(), expiresAt, now.toISOString()]
     );
 
     // In development / demo environment, log securely for local testing
@@ -146,12 +197,14 @@ export class AuthService {
         [userId, challenge.phone_number, now.toISOString(), now.toISOString(), now.toISOString()]
       );
 
-      // Assign default CUSTOMER role
-      const customerRole = this.db.queryOne<any>("SELECT id FROM roles WHERE name = 'CUSTOMER'");
-      if (customerRole) {
+      // Check if registration was for Partner or Customer
+      const isPartnerChallenge = challenge.role === "PARTNER" || challenge.role === "VENDOR_OWNER";
+      const targetRoleName = isPartnerChallenge ? "VENDOR_OWNER" : "CUSTOMER";
+      const targetRole = this.db.queryOne<any>("SELECT id FROM roles WHERE name = ?", [targetRoleName]);
+      if (targetRole) {
         this.db.execute(
           `INSERT INTO user_permissions (id, user_id, role_id) VALUES (?, ?, ?)`,
-          [`perm_${crypto.randomUUID()}`, userId, customerRole.id]
+          [`perm_${crypto.randomUUID()}`, userId, targetRole.id]
         );
       }
 
@@ -162,6 +215,24 @@ export class AuthService {
         "UPDATE users SET phone_verified_at = ?, updated_at = ? WHERE id = ?",
         [now.toISOString(), now.toISOString(), user.id]
       );
+
+      // If existing user verified a PARTNER challenge, ensure VENDOR_OWNER role is granted
+      const isPartnerChallenge = challenge.role === "PARTNER" || challenge.role === "VENDOR_OWNER";
+      if (isPartnerChallenge) {
+        const vendorRole = this.db.queryOne<any>("SELECT id FROM roles WHERE name = 'VENDOR_OWNER'");
+        if (vendorRole) {
+          const hasVendorPerm = this.db.queryOne<any>(
+            "SELECT id FROM user_permissions WHERE user_id = ? AND role_id = ?",
+            [user.id, vendorRole.id]
+          );
+          if (!hasVendorPerm) {
+            this.db.execute(
+              `INSERT INTO user_permissions (id, user_id, role_id) VALUES (?, ?, ?)`,
+              [`perm_${crypto.randomUUID()}`, user.id, vendorRole.id]
+            );
+          }
+        }
+      }
     }
 
     // Fetch User Roles & Business Memberships
@@ -394,6 +465,51 @@ export class AuthService {
   }
 
   /**
+<<<<<<< HEAD
+=======
+   * Check user registration and role status before OTP dispatch
+   */
+  async checkUserStatus(rawPhone: string) {
+    if (!isValidIndianPhone(rawPhone)) {
+      throw new BadRequestException("Phone number must be a valid Indian mobile number (+91XXXXXXXXXX)");
+    }
+    const phone = normalizeIndianPhone(rawPhone);
+    const user = this.db.queryOne<any>("SELECT * FROM users WHERE phone_number = ?", [phone]);
+
+    if (!user) {
+      return {
+        exists: false,
+        phone,
+        hasCustomerRole: false,
+        hasPartnerRole: false,
+        businessCount: 0,
+        businesses: [],
+        message: "No registered account found for this mobile number."
+      };
+    }
+
+    const roles = this.getUserRoles(user.id);
+    const businesses = this.getUserBusinesses(user.id);
+    const hasCustomerRole = roles.includes("CUSTOMER");
+    const hasPartnerRole = roles.includes("VENDOR_OWNER") || roles.includes("VENDOR_STAFF") || businesses.length > 0;
+
+    return {
+      exists: true,
+      phone,
+      userId: user.id,
+      fullName: user.full_name || null,
+      status: user.status || "ACTIVE",
+      roles,
+      hasCustomerRole,
+      hasPartnerRole,
+      businessCount: businesses.length,
+      businesses: businesses.map((b) => ({ id: b.id, name: b.name, status: b.status, isVerified: !!b.is_verified })),
+      message: "Account found."
+    };
+  }
+
+  /**
+>>>>>>> feature/superadmin
    * Resend OTP for an existing challenge with cooldown enforcement
    */
   async resendOtp(challengeId: string) {

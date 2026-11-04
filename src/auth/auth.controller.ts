@@ -32,6 +32,7 @@ class SwitchRoleDto {
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+<<<<<<< HEAD
   @Post("otp/request")
   @ApiOperation({ summary: "Request 6-digit SMS OTP" })
   @ApiResponse({ status: 200, description: "OTP challenge created" })
@@ -45,9 +46,48 @@ export class AuthController {
 
   @Post("otp/send")
   @ApiOperation({ summary: "Dispatch 6-digit SMS OTP with sliding-window rate limit" })
+=======
+  @Post("check-user")
+  @ApiOperation({ summary: "Check if phone is registered and its assigned roles (Customer/Partner)" })
+  async checkUser(@Body() body: any) {
+    const phone = body.phoneNumber || body.phone;
+    const data = await this.authService.checkUserStatus(phone);
+    return {
+      success: true,
+      data,
+    };
+  }
+
+  @Post("otp/request")
+  @ApiOperation({ summary: "Request 6-digit SMS OTP with strict role validation" })
+>>>>>>> feature/superadmin
   @ApiResponse({ status: 200, description: "OTP challenge created" })
-  async sendOtp(@Body() body: SendOtpDto) {
-    const data = await this.authService.sendOtp(body.phoneNumber, body.purpose);
+  async requestOtp(@Body() body: any) {
+    const phone = body.phoneNumber || body.phone;
+    const data = await this.authService.sendOtp(phone, body.purpose, body.role);
+    return {
+      success: true,
+      data
+    };
+  }
+
+  @Post("otp/send")
+  @ApiOperation({ summary: "Dispatch 6-digit SMS OTP with sliding-window rate limit and strict role check" })
+  @ApiResponse({ status: 200, description: "OTP challenge created" })
+  async sendOtp(@Body() body: any) {
+    const phone = body.phoneNumber || body.phone;
+    const data = await this.authService.sendOtp(phone, body.purpose, body.role);
+    return {
+      success: true,
+      data
+    };
+  }
+
+  @Post("otp/resend")
+  @ApiOperation({ summary: "Resend 6-digit SMS OTP adhering to mandatory cooldown" })
+  @ApiResponse({ status: 200, description: "New OTP dispatched" })
+  async resendOtp(@Body() body: ResendOtpDto) {
+    const data = await this.authService.resendOtp(body.challengeId);
     return {
       success: true,
       data

@@ -46,6 +46,39 @@ async function syncToMySQL() {
   }
   console.log(`Synced ${users.length} users to MySQL.`);
 
+  // 1a. Sync Categories
+  const categoriesList = sqlite.prepare('SELECT * FROM categories').all();
+  for (const cat of categoriesList) {
+    await mysqlConn.execute(
+      `INSERT INTO categories (id, parent_id, name, slug, icon_name, meta_title, meta_description, sort_order, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE 
+         name = VALUES(name),
+         slug = VALUES(slug),
+         icon_name = VALUES(icon_name),
+         sort_order = VALUES(sort_order),
+         is_active = VALUES(is_active)`,
+      [
+        cat.id, cat.parent_id || null, cat.name, cat.slug, cat.icon_name || null,
+        cat.meta_title || null, cat.meta_description || null, cat.sort_order || 0,
+        cat.is_active !== undefined ? cat.is_active : 1
+      ]
+    );
+  }
+  console.log(`Synced ${categoriesList.length} categories to MySQL.`);
+
+  // 1b. Sync Cities
+  const cities = sqlite.prepare('SELECT * FROM cities').all();
+  for (const c of cities) {
+    await mysqlConn.execute(
+      `INSERT INTO cities (id, district_id, name, slug, latitude, longitude, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE name = VALUES(name), slug = VALUES(slug)`,
+      [c.id, c.district_id, c.name, c.slug, c.latitude, c.longitude, c.is_active || 1]
+    );
+  }
+  console.log(`Synced ${cities.length} cities to MySQL.`);
+
   // 2. Sync Localities
   const localities = sqlite.prepare('SELECT * FROM localities').all();
   for (const loc of localities) {
