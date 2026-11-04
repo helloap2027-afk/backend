@@ -362,6 +362,66 @@ export class AdminController {
     return this.adminService.deleteSubscriptionPlan(id, actorId);
   }
 
+  // =========================================================================
+  // ENTERPRISE STAGE 1: BENEFITS LIBRARY & CAPABILITIES API
+  // =========================================================================
+
+  @Get("subscriptions/capabilities")
+  getBackendCapabilities() {
+    return {
+      success: true,
+      data: this.adminService.getBackendCapabilities(),
+    };
+  }
+
+  @Get("subscriptions/benefits")
+  getBenefitDefinitions(@Query() query: any) {
+    return {
+      success: true,
+      data: this.adminService.getBenefitDefinitions(query),
+    };
+  }
+
+  @Get("subscriptions/benefits/:id")
+  getBenefitById(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getBenefitById(id),
+    };
+  }
+
+  @Post("subscriptions/benefits")
+  createBenefitDefinition(@Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.createBenefitDefinition(body, actorId);
+  }
+
+  @Put("subscriptions/benefits/:id")
+  updateBenefitDefinition(@Param("id") id: string, @Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.updateBenefitDefinition(id, body, actorId);
+  }
+
+  @Get("subscriptions/plans/:id/details")
+  getPlanDetailsWithBenefits(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getPlanDetailsWithBenefits(id),
+    };
+  }
+
+  @Post("subscriptions/plans/:id/benefits")
+  assignBenefitsToPlan(@Param("id") id: string, @Body("benefits") benefits: any[], @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.assignBenefitsToPlan(id, benefits, actorId);
+  }
+
+  @Post("subscriptions/plans/:id/publish")
+  publishPlanVersion(@Param("id") id: string, @Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.publishPlanVersion(id, body, actorId);
+  }
+
   @Get("subscriptions/:id")
   getSubscriptionById(@Param("id") id: string) {
     return {
