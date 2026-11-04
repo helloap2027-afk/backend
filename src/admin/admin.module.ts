@@ -8,14 +8,8 @@ import { AuthModule } from "../auth/auth.module";
 
 @Module({
   imports: [DatabaseModule, AuthModule],
-<<<<<<< HEAD
-  controllers: [AdminController],
-  providers: [AdminService],
-  exports: [AdminService],
-=======
   controllers: [AdminController, AdsController],
   providers: [AdminService, AdsService],
   exports: [AdminService, AdsService],
->>>>>>> feature/superadmin
 })
 export class AdminModule {}

@@ -48,15 +48,11 @@ async function bootstrap() {
     allowedHeaders: [
       "Content-Type",
       "Authorization",
-<<<<<<< HEAD
-      "X-Business-Id",
-=======
       "authorization",
       "x-user-id",
       "X-User-Id",
       "X-Business-Id",
       "x-business-id",
->>>>>>> feature/superadmin
       "X-Requested-With",
       "Accept",
       "If-None-Match",
@@ -65,15 +61,11 @@ async function bootstrap() {
       "Pragma",
       "pragma",
       "Expires",
-<<<<<<< HEAD
-      "Origin"
-=======
       "Origin",
       "x-admin-user",
       "x-admin-role",
       "X-Admin-User",
       "X-Admin-Role"
->>>>>>> feature/superadmin
     ]
   });
 
