@@ -852,6 +852,66 @@ export class AdminService {
     return sub;
   }
 
+  deleteSubscription(id: string, actorId: string = "super-admin") {
+    const sub = this.db.queryOne<any>("SELECT * FROM subscriptions WHERE id = ?", [id]);
+    if (!sub) {
+      throw new NotFoundException(`Subscription record '${id}' not found`);
+    }
+
+    this.db.execute("DELETE FROM subscriptions WHERE id = ?", [id]);
+
+    const now = new Date().toISOString();
+    const auditId = `audit-${Date.now()}`;
+    try {
+      this.db.execute(`
+        INSERT INTO audit_logs (id, actor_user_id, action, entity_name, entity_id, payload_before, payload_after, created_at)
+        VALUES (?, ?, 'SUBSCRIPTION_DELETED', 'subscriptions', ?, ?, NULL, ?)
+      `, [
+        auditId,
+        actorId,
+        id,
+        JSON.stringify(sub),
+        now
+      ]);
+    } catch {}
+
+    return {
+      success: true,
+      message: `Subscription record for '${sub.subscriber_name}' deleted successfully.`,
+      id
+    };
+  }
+
+  bulkDeleteSubscriptions(ids: string[], actorId: string = "super-admin") {
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return { success: true, count: 0 };
+    }
+
+    const placeholders = ids.map(() => "?").join(",");
+    this.db.execute(`DELETE FROM subscriptions WHERE id IN (${placeholders})`, ids);
+
+    const now = new Date().toISOString();
+    try {
+      this.db.execute(`
+        INSERT INTO audit_logs (id, actor_user_id, action, entity_name, entity_id, payload_before, payload_after, created_at)
+        VALUES (?, ?, 'SUBSCRIPTION_BULK_DELETED', 'subscriptions', ?, ?, NULL, ?)
+      `, [
+        `audit-${Date.now()}`,
+        actorId,
+        ids.join(","),
+        JSON.stringify({ count: ids.length, deletedIds: ids }),
+        now
+      ]);
+    } catch {}
+
+    return {
+      success: true,
+      message: `${ids.length} subscription record(s) deleted successfully.`,
+      count: ids.length,
+      deletedIds: ids
+    };
+  }
+
   // =========================================================================
   // NOTIFICATIONS MODULE (DATABASE-DRIVEN, SERVER-SIDE SEARCH & SYNC)
   // =========================================================================

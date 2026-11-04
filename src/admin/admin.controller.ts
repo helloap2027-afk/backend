@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Patch, Param, Body, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import * as fs from "node:fs";
 import { AdminService } from "./admin.service";
 import { AuthService } from "../auth/auth.service";
@@ -350,6 +350,18 @@ export class AdminController {
       success: true,
       data: this.adminService.getSubscriptionById(id),
     };
+  }
+
+  @Delete("subscriptions/:id")
+  deleteSubscription(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.deleteSubscription(id, actorId);
+  }
+
+  @Post("subscriptions/bulk-delete")
+  bulkDeleteSubscriptions(@Body("ids") ids: string[], @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.bulkDeleteSubscriptions(ids, actorId);
   }
 
   // =========================================================================
