@@ -844,6 +844,113 @@ export class AdminService {
     }));
   }
 
+  createSubscriptionPlan(payload: any, actorId: string = "super-admin") {
+    const id = payload.id || `plan_${Date.now()}`;
+    const name = payload.name;
+    if (!name) throw new BadRequestException("Plan name is required");
+
+    const description = payload.description || "";
+    const price = Number(payload.price) || 0;
+    const currency = payload.currency || "INR";
+    const billing_interval = payload.billing_interval || "MONTHLY";
+    const features = Array.isArray(payload.features) ? JSON.stringify(payload.features) : (payload.features || "[]");
+    const status = payload.status || "ACTIVE";
+    const now = new Date().toISOString();
+
+    this.db.execute(`
+      INSERT INTO subscription_plans (id, name, description, price, currency, billing_interval, features, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [id, name, description, price, currency, billing_interval, features, status, now, now]);
+
+    const auditId = `audit-${Date.now()}`;
+    try {
+      this.db.execute(`
+        INSERT INTO audit_logs (id, actor_user_id, action, entity_name, entity_id, payload_before, payload_after, created_at)
+        VALUES (?, ?, 'PLAN_CREATED', 'subscription_plans', ?, NULL, ?, ?)
+      `, [auditId, actorId, id, JSON.stringify(payload), now]);
+    } catch {}
+
+    return {
+      success: true,
+      message: `Plan '${name}' created successfully.`,
+      data: { id, name, description, price, currency, billing_interval, features: typeof features === "string" ? JSON.parse(features) : features, status }
+    };
+  }
+
+  updateSubscriptionPlan(id: string, payload: any, actorId: string = "super-admin") {
+    const existing = this.db.queryOne<any>("SELECT * FROM subscription_plans WHERE id = ?", [id]);
+    if (!existing) {
+      throw new NotFoundException(`Plan '${id}' not found`);
+    }
+
+    const name = payload.name !== undefined ? payload.name : existing.name;
+    const description = payload.description !== undefined ? payload.description : existing.description;
+    const price = payload.price !== undefined ? Number(payload.price) : existing.price;
+    const currency = payload.currency !== undefined ? payload.currency : existing.currency;
+    const billing_interval = payload.billing_interval !== undefined ? payload.billing_interval : existing.billing_interval;
+    const features = payload.features !== undefined 
+      ? (Array.isArray(payload.features) ? JSON.stringify(payload.features) : payload.features)
+      : existing.features;
+    const status = payload.status !== undefined ? payload.status : existing.status;
+    const now = new Date().toISOString();
+
+    this.db.execute(`
+      UPDATE subscription_plans
+      SET name = ?, description = ?, price = ?, currency = ?, billing_interval = ?, features = ?, status = ?, updated_at = ?
+      WHERE id = ?
+    `, [name, description, price, currency, billing_interval, features, status, now, id]);
+
+    const auditId = `audit-${Date.now()}`;
+    try {
+      this.db.execute(`
+        INSERT INTO audit_logs (id, actor_user_id, action, entity_name, entity_id, payload_before, payload_after, created_at)
+        VALUES (?, ?, 'PLAN_UPDATED', 'subscription_plans', ?, ?, ?, ?)
+      `, [auditId, actorId, id, JSON.stringify(existing), JSON.stringify(payload), now]);
+    } catch {}
+
+    return {
+      success: true,
+      message: `Plan '${name}' updated successfully.`,
+      data: { id, name, description, price, currency, billing_interval, features: typeof features === "string" ? JSON.parse(features) : features, status }
+    };
+  }
+
+  deleteSubscriptionPlan(id: string, actorId: string = "super-admin") {
+    const plan = this.db.queryOne<any>("SELECT * FROM subscription_plans WHERE id = ?", [id]);
+    if (!plan) {
+      throw new NotFoundException(`Plan '${id}' not found`);
+    }
+
+    // Safety check: protect plans with active subscribers
+    const activeSubs = this.db.queryOne<{ count: number }>(
+      "SELECT COUNT(*) as count FROM subscriptions WHERE plan_id = ?",
+      [id]
+    );
+
+    if (activeSubs && activeSubs.count > 0) {
+      throw new BadRequestException(
+        `Cannot delete plan '${plan.name}' because it currently has ${activeSubs.count} subscriber(s). You can change its status to INACTIVE instead.`
+      );
+    }
+
+    this.db.execute("DELETE FROM subscription_plans WHERE id = ?", [id]);
+
+    const now = new Date().toISOString();
+    const auditId = `audit-${Date.now()}`;
+    try {
+      this.db.execute(`
+        INSERT INTO audit_logs (id, actor_user_id, action, entity_name, entity_id, payload_before, payload_after, created_at)
+        VALUES (?, ?, 'PLAN_DELETED', 'subscription_plans', ?, ?, NULL, ?)
+      `, [auditId, actorId, id, JSON.stringify(plan), now]);
+    } catch {}
+
+    return {
+      success: true,
+      message: `Plan '${plan.name}' deleted successfully.`,
+      id
+    };
+  }
+
   getSubscriptionById(id: string) {
     const sub = this.db.queryOne<any>("SELECT * FROM subscriptions WHERE id = ?", [id]);
     if (!sub) {

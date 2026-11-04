@@ -344,6 +344,24 @@ export class AdminController {
     };
   }
 
+  @Post("subscriptions/plans")
+  createSubscriptionPlan(@Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.createSubscriptionPlan(body, actorId);
+  }
+
+  @Put("subscriptions/plans/:id")
+  updateSubscriptionPlan(@Param("id") id: string, @Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.updateSubscriptionPlan(id, body, actorId);
+  }
+
+  @Delete("subscriptions/plans/:id")
+  deleteSubscriptionPlan(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.deleteSubscriptionPlan(id, actorId);
+  }
+
   @Get("subscriptions/:id")
   getSubscriptionById(@Param("id") id: string) {
     return {
