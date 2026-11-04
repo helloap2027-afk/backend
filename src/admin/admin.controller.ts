@@ -190,6 +190,12 @@ export class AdminController {
     return this.adminService.rejectBusiness(id, reason || "Documents failed validation", actorId);
   }
 
+  @Post("businesses/:id/kyc-reminder")
+  sendKycReminder(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.sendKycReminder(id, actorId);
+  }
+
   @Post("businesses/:id/suspend")
   suspendBusiness(@Param("id") id: string, @Body("reason") reason: string, @Req() req: any) {
     const actorId = this.extractAdminActor(req);

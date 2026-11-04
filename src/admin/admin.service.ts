@@ -248,6 +248,70 @@ export class AdminService {
     };
   }
 
+  sendKycReminder(id: string, actorId: string = "super-admin") {
+    const biz = this.db.queryOne<any>("SELECT * FROM businesses WHERE id = ?", [id]);
+    if (!biz) {
+      throw new NotFoundException(`Business '${id}' not found`);
+    }
+
+    const owner = this.db.queryOne<any>(
+      "SELECT u.id, u.phone_number, u.email, u.full_name FROM business_owners bo JOIN users u ON bo.user_id = u.id WHERE bo.business_id = ?",
+      [id]
+    );
+
+    const recipientEmail = owner?.email || biz.support_email;
+    const recipientPhone = owner?.phone_number || biz.primary_phone || "Merchant";
+    const now = new Date().toISOString();
+
+    // 1. In-App Notification
+    try {
+      this.db.execute(`
+        INSERT INTO notifications (id, title, message, type, recipient, is_read, related_entity, related_id, created_at)
+        VALUES (?, ?, ?, 'KYC_VERIFICATION', ?, 0, 'businesses', ?, ?)
+      `, [
+        `notif_remind_${Date.now()}`,
+        `Action Required: Complete KYC for ${biz.name}`,
+        `Please complete and upload your business KYC documents to unlock the verified trust badge on HELLO-Hi.`,
+        recipientPhone,
+        id,
+        now
+      ]);
+    } catch {}
+
+    // 2. Dynamic Email Dispatch
+    let emailResult: any = { success: false, message: "No email address found on file" };
+    if (recipientEmail) {
+      emailResult = this.emailService.triggerEventEmail("MERCHANT_KYC_REMINDER", recipientEmail, {
+        business_name: biz.name,
+        first_name: owner?.full_name || biz.name,
+        city: biz.city || "Andhra Pradesh"
+      });
+    }
+
+    // 3. Audit Log
+    const auditId = `audit-${Date.now()}`;
+    this.db.execute(`
+      INSERT INTO audit_logs (id, actor_user_id, action, entity_name, entity_id, payload_before, payload_after, created_at)
+      VALUES (?, ?, 'KYC_REMINDER_SENT', 'businesses', ?, NULL, ?, ?)
+    `, [
+      auditId,
+      actorId,
+      id,
+      JSON.stringify({ recipientEmail, recipientPhone, status: biz.status, is_verified: biz.is_verified }),
+      now
+    ]);
+
+    return {
+      success: true,
+      message: recipientEmail 
+        ? `KYC Reminder email dispatched successfully to ${recipientEmail}!`
+        : `In-app notification sent. (No email address found on file for ${biz.name})`,
+      businessId: id,
+      recipientEmail,
+      emailResult
+    };
+  }
+
   suspendBusiness(id: string, reason?: string, actorId: string = "super-admin") {
     const biz = this.db.queryOne<any>("SELECT * FROM businesses WHERE id = ?", [id]);
     if (!biz) {
