@@ -10,6 +10,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private db!: DatabaseSync;
   private dbPath: string = "";
   private mysqlPool: mysql.Pool | null = null;
+  private isSyncingFromMySQL = false;
 
   async onModuleInit() {
     await ensureSqlJs();
@@ -38,8 +39,61 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         queueLimit: 0,
       });
       console.log("[DatabaseService] Connected to XAMPP MySQL (hello_db) on port 3306");
+      await this.syncFromMySQL();
     } catch (err: any) {
       console.warn("[DatabaseService] Could not connect to XAMPP MySQL:", err?.message || err);
+    }
+  }
+
+  
+  public async syncFromMySQL() {
+    if (!this.mysqlPool) return;
+    this.isSyncingFromMySQL = true;
+    try {
+      this.execute("PRAGMA foreign_keys = OFF;");
+      const tables = [
+        "states", "districts", "cities", "localities", "categories", "services",
+        "users", "roles", "user_permissions", "user_sessions", "admin_preferences",
+        "businesses", "business_categories", "business_locations", "business_hours",
+        "business_owners", "business_media", "business_staff", "enquiries", "enquiry_events",
+        "reviews", "saved_businesses", "cms_pages", "cms_revisions", "cms_audit_logs",
+        "contact_submissions", "audit_logs", "payments", "subscription_plans",
+        "subscriptions", "notifications", "wallet_transactions", "withdrawals",
+        "auth_mfa_challenges", "ad_campaigns", "coupons", "coupon_redemptions",
+        "in_app_notifications", "push_templates", "normal_push_logs",
+        "business_kyc_documents"
+      ];
+
+      for (const table of tables) {
+        try {
+          const [rows] = await this.mysqlPool.query<any[]>(`SELECT * FROM ${table}`);
+          if (Array.isArray(rows) && rows.length > 0) {
+            this.execute(`DELETE FROM ${table}`);
+            const cols = Object.keys(rows[0]);
+            const placeholders = cols.map(() => "?").join(", ");
+            const sql = `INSERT OR REPLACE INTO ${table} (${cols.join(", ")}) VALUES (${placeholders})`;
+            for (const row of rows) {
+              const vals = cols.map((c) => {
+                const val = row[c];
+                if (val instanceof Date) return val.toISOString();
+                if (typeof val === "object" && val !== null) return JSON.stringify(val);
+                return val;
+              });
+              this.execute(sql, vals);
+            }
+          }
+        } catch (tableErr: any) {
+          // ignore table error
+        }
+      }
+
+      this.execute("PRAGMA foreign_keys = ON;");
+      const bCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM businesses");
+      console.log(`[DatabaseService] Synced ${bCount?.c || 0} businesses and all records from MySQL hello_db into active memory!`);
+    } catch (err: any) {
+      console.warn("[DatabaseService] Failed syncing from MySQL:", err?.message || err);
+    } finally {
+      this.isSyncingFromMySQL = false;
     }
   }
 
@@ -59,6 +113,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     this.db.exec("PRAGMA foreign_keys = ON;");
 
     this.createTables();
+    try { this.db.exec("ALTER TABLE businesses ADD COLUMN business_type TEXT DEFAULT 'Sole Proprietor';"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'English';"); } catch {}
+    try { this.db.exec("ALTER TABLE otp_challenges ADD COLUMN role TEXT DEFAULT 'CUSTOMER';"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_type TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_number TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_file_url TEXT;"); } catch {}
     this.seedDefaults();
   }
 
@@ -72,6 +132,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         avatar_url TEXT,
         password_hash TEXT,
         preferred_language TEXT DEFAULT 'English',
+        identity_proof_type TEXT,
+        identity_proof_number TEXT,
         status TEXT NOT NULL DEFAULT 'ACTIVE',
         phone_verified_at TEXT,
         created_at TEXT NOT NULL,
@@ -96,6 +158,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         otp_code_hash TEXT NOT NULL,
         attempts_count INTEGER NOT NULL DEFAULT 0,
         purpose TEXT NOT NULL DEFAULT 'LOGIN',
+        role TEXT DEFAULT 'CUSTOMER',
         expires_at TEXT NOT NULL,
         verified_at TEXT,
         created_at TEXT NOT NULL
@@ -188,6 +251,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         legal_name TEXT,
+        business_type TEXT DEFAULT 'Sole Proprietor',
         slug TEXT UNIQUE NOT NULL,
         description TEXT,
         primary_phone TEXT NOT NULL,
@@ -202,6 +266,29 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         average_rating REAL NOT NULL DEFAULT 0.0,
         total_reviews INTEGER NOT NULL DEFAULT 0,
         total_enquiries INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS business_kyc_documents (
+        id TEXT PRIMARY KEY,
+        business_id TEXT NOT NULL,
+        user_id TEXT,
+        document_category TEXT NOT NULL DEFAULT 'BUSINESS_PROOF',
+        document_type TEXT NOT NULL,
+        document_number TEXT,
+        issuing_authority TEXT,
+        issue_date TEXT,
+        expiry_date TEXT,
+        file_url TEXT,
+        file_name TEXT,
+        file_size INTEGER,
+        mime_type TEXT,
+        has_no_document INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        admin_remarks TEXT,
+        verified_at TEXT,
+        verified_by TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -665,46 +752,56 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private seedDefaults() {
     const now = new Date().toISOString();
 
-    // 1. Roles
-    const rolesCount = this.db.prepare("SELECT COUNT(*) as count FROM roles").get() as { count: number };
-    if (rolesCount.count === 0) {
-      const insertRole = this.db.prepare("INSERT INTO roles (id, name, description) VALUES (?, ?, ?)");
-      insertRole.run("role-cust", "CUSTOMER", "Consumer discovering local businesses and sending leads");
-      insertRole.run("role-owner", "VENDOR_OWNER", "Business owner with full rights over business profiles and staff");
-      insertRole.run("role-staff", "VENDOR_STAFF", "Business staff managing assigned leads");
-      insertRole.run("role-superadmin", "SUPER_ADMIN", "Platform root administrative privileges");
-    }
+    // 1. Roles - Always guarantee core system roles exist
+    const insertRole = this.db.prepare("INSERT OR IGNORE INTO roles (id, name, description) VALUES (?, ?, ?)");
+    insertRole.run("role-cust", "CUSTOMER", "Consumer discovering local businesses and sending leads");
+    insertRole.run("role-owner", "VENDOR_OWNER", "Business owner with full rights over business profiles and staff");
+    insertRole.run("role-staff", "VENDOR_STAFF", "Business staff managing assigned leads");
+    insertRole.run("role-superadmin", "SUPER_ADMIN", "Platform root administrative privileges");
 
     // 1b. Default Super Administrator
-    const superAdmin = this.db.prepare("SELECT * FROM users WHERE email = ?").get("admin@hello-hi.in") as any;
+    let superAdmin = this.db.prepare("SELECT * FROM users WHERE id = 'usr_super_admin' OR email = 'admin@hello-hi.in'").get() as any;
     if (!superAdmin) {
-      this.db.prepare(`
-        INSERT OR IGNORE INTO users (id, phone_number, full_name, email, avatar_url, status, phone_verified_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "usr_super_admin",
-        "+919848012345",
-        "Admin User",
-        "admin@hello-hi.in",
-        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-        "ACTIVE",
-        now,
-        now,
-        now
-      );
+      try {
+        this.db.prepare(`
+          INSERT OR IGNORE INTO users (id, phone_number, full_name, email, avatar_url, status, phone_verified_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          "usr_super_admin",
+          "+919848000001",
+          "Admin User",
+          "admin@hello-hi.in",
+          "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
+          "ACTIVE",
+          now,
+          now,
+          now
+        );
+      } catch (err) {
+        console.warn("[DatabaseService] Warning inserting default super admin:", (err as Error).message);
+      }
+    }
+    const superAdminRef = (this.db.prepare("SELECT id FROM users WHERE email = 'admin@hello-hi.in' OR id = 'usr_super_admin'").get() as any) || { id: "usr_super_admin" };
+    try {
       this.db.prepare(`
         INSERT OR IGNORE INTO user_permissions (id, user_id, role_id)
-        VALUES (?, ?, ?)
-      `).run("perm-superadmin", "usr_super_admin", "role-superadmin");
+        VALUES (?, ?, 'role-superadmin')
+      `).run(`perm-${superAdminRef.id}`, superAdminRef.id);
+    } catch (e) {
+      console.warn("[DatabaseService] user_permissions seed note:", (e as Error).message);
+    }
+    try {
       this.db.prepare(`
         INSERT OR IGNORE INTO admin_preferences (user_id, language, email_notifications, sms_alerts, two_factor_auth, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run("usr_super_admin", "English", 1, 1, 0, now);
+      `).run(superAdminRef.id, "English", 1, 1, 0, now);
+    } catch (e) {
+      console.warn("[DatabaseService] admin_preferences seed note:", (e as Error).message);
     }
 
     // Ensure default Super Admin has scrypt-hashed password
-    const adminUser = this.db.prepare("SELECT * FROM users WHERE email = ?").get("admin@hello-hi.in") as any;
-    if (adminUser && (!adminUser.password_hash || adminUser.password_hash.trim() === "")) {
+    const existingAdmin = this.db.prepare("SELECT * FROM users WHERE email = ?").get("admin@hello-hi.in") as any;
+    if (existingAdmin && (!existingAdmin.password_hash || existingAdmin.password_hash.trim() === "")) {
       const salt = "4a9b2c8f1e6d3a7c";
       const hash = crypto.scryptSync("admin123", salt, 64).toString("hex");
       this.db.prepare("UPDATE users SET password_hash = ? WHERE email = ?").run(`${salt}:${hash}`, "admin@hello-hi.in");
@@ -810,10 +907,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (!defaultVendor) {
       const vendorId = "user-vendor-pilot";
       this.db.prepare(
-        "INSERT INTO users (id, phone_number, full_name, email, status, phone_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?)"
+        "INSERT OR IGNORE INTO users (id, phone_number, full_name, email, status, phone_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?)"
       ).run(vendorId, "+919848099999", "Ramesh Kumar (Pilot Partner)", "ramesh.kumar@hello-hi.in", now, now, now);
       this.db.prepare(
-        "INSERT INTO user_permissions (id, user_id, role_id) VALUES (?, ?, 'role-owner')"
+        "INSERT OR IGNORE INTO user_permissions (id, user_id, role_id) VALUES (?, ?, 'role-owner')"
       ).run("perm-vendor-pilot", vendorId);
       defaultVendor = { id: vendorId };
     }
@@ -1461,9 +1558,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Seed 8 Standard Hello-Hi CMS Pages
-    if (true) {
+    const existingCmsPages = this.query<{ count: number }>("SELECT COUNT(*) as count FROM cms_pages");
+    if (!existingCmsPages || existingCmsPages[0]?.count === 0) {
       const insertPage = this.db.prepare(`
-        INSERT INTO cms_pages (
+        INSERT OR IGNORE INTO cms_pages (
           id, slug, language, title, short_description, content, faq_items_json,
           status, visibility, published_revision_id, meta_title, meta_description,
           canonical_url, robots_index, og_title, og_description, og_image,
@@ -1472,7 +1570,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `);
 
       const insertRevision = this.db.prepare(`
-        INSERT INTO cms_revisions (
+        INSERT OR IGNORE INTO cms_revisions (
           id, page_id, page_slug, language, revision_number, title, short_description,
           content, faq_items_json, seo_json, status, change_summary,
           created_by, created_at
@@ -1480,7 +1578,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `);
 
       const insertAudit = this.db.prepare(`
-        INSERT INTO cms_audit_logs (
+        INSERT OR IGNORE INTO cms_audit_logs (
           id, page_slug, language, action, previous_status, new_status,
           performed_by, performed_by_role, details, timestamp
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1886,13 +1984,28 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async replicateToMySQL(sql: string, params: any[]) {
-    if (!this.mysqlPool) return;
+    if (!this.mysqlPool || this.isSyncingFromMySQL) return;
     try {
-      // Normalize parameterized syntax for MySQL
-      await this.mysqlPool.execute(sql, params);
+      const trimmed = sql.trim();
+      // Skip SQLite-specific PRAGMA statements
+      if (trimmed.toUpperCase().startsWith("PRAGMA")) return;
+
+      // Normalize SQLite to MySQL syntax
+      let mysqlSql = trimmed
+        .replace(/INSERT\s+OR\s+REPLACE\s+INTO/gi, "REPLACE INTO")
+        .replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, "INSERT IGNORE INTO")
+        .replace(/datetime\('now'\)/gi, "NOW()");
+
+      // Normalize parameter values for MySQL
+      const mysqlParams = (params || []).map((p) => {
+        if (p === undefined) return null;
+        if (typeof p === "boolean") return p ? 1 : 0;
+        return p;
+      });
+
+      await this.mysqlPool.execute(mysqlSql, mysqlParams);
     } catch (err: any) {
-      // Non-blocking replica log
-      // console.debug("[MySQL Replication Notice]", err?.message || err);
+      console.warn("[MySQL Replication Warning]:", err?.message || err);
     }
   }
 

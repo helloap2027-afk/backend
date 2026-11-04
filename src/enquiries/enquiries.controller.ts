@@ -13,7 +13,7 @@ export class EnquiriesController {
 
   @Post()
   async createEnquiry(
-    @Body() body: { businessId: string; customerName: string; customerPhone: string; message: string; priority?: "NORMAL" | "HIGH" | "URGENT" },
+    @Body() body: any,
     @Req() req: any,
   ) {
     let customerId: string | undefined;
@@ -37,12 +37,48 @@ export class EnquiriesController {
       message: body.message,
       priority: body.priority,
       customerId,
+      cityName: body.cityName || body.city,
+      budget: body.budget,
+      consentAgreed: body.consentAgreed,
     });
 
     return {
       success: true,
       data,
       message: "Enquiry submitted successfully! The business owner has been notified.",
+    };
+  }
+
+  @Post("instant-quote")
+  async createInstantQuote(
+    @Body() body: {
+      customerName?: string;
+      customerPhone: string;
+      serviceRequired: string;
+      budget?: string;
+      cityName?: string;
+      localityName?: string;
+      categorySlug?: string;
+      businessId?: string;
+      consentAgreed?: boolean;
+    },
+  ) {
+    const data = this.enquiriesService.createInstantQuote({
+      customerName: body.customerName || "Customer",
+      customerPhone: body.customerPhone,
+      serviceRequired: body.serviceRequired,
+      budget: body.budget,
+      cityName: body.cityName,
+      localityName: body.localityName,
+      categorySlug: body.categorySlug,
+      businessId: body.businessId,
+      consentAgreed: body.consentAgreed,
+    });
+
+    return {
+      success: true,
+      data,
+      message: "Instant Deal Quote dispatched successfully! Verified vendors are preparing your quotes.",
     };
   }
 

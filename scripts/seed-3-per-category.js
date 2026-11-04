@@ -514,6 +514,7 @@ async function seedThreePerCategory() {
   });
 
   console.log('Connected to SQLite and XAMPP MySQL.');
+  sqlite.exec('PRAGMA foreign_keys = OFF;');
   await mysqlConn.execute('SET FOREIGN_KEY_CHECKS = 0');
 
   let totalAdded = 0;
@@ -592,7 +593,7 @@ async function seedThreePerCategory() {
       let locRow = sqlite.prepare("SELECT id FROM localities WHERE city_id = ? AND (LOWER(name) = LOWER(?) OR slug = ?)").get(cityRow.id, item.localityName, locSlug);
       const locId = locRow ? locRow.id : `loc_${locSlug}`;
       if (!locRow) {
-        sqlite.prepare("INSERT INTO localities (id, city_id, name, slug, pincode, latitude, longitude, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").run(
+        sqlite.prepare("INSERT OR REPLACE INTO localities (id, city_id, name, slug, pincode, latitude, longitude, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").run(
           locId, cityRow.id, item.localityName, locSlug, item.pincode, cityRow.latitude + 0.01, cityRow.longitude + 0.01
         );
         await mysqlConn.execute(

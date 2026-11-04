@@ -66,6 +66,24 @@ export class LocationsService {
     );
   }
 
+  getLocalitiesByCityQuery(cityQuery: string) {
+    if (!cityQuery || !cityQuery.trim()) {
+      return this.db.query("SELECT * FROM localities WHERE is_active = 1 ORDER BY name ASC LIMIT 50");
+    }
+    const q = cityQuery.trim().toLowerCase();
+    const cityRow = this.db.queryOne<any>(
+      "SELECT id FROM cities WHERE LOWER(name) = ? OR LOWER(slug) = ? OR id = ?",
+      [q, q, cityQuery.trim()]
+    );
+    if (!cityRow) {
+      return this.db.query(
+        "SELECT l.* FROM localities l JOIN cities c ON l.city_id = c.id WHERE LOWER(c.name) LIKE ? AND l.is_active = 1 ORDER BY l.name ASC",
+        ['%' + q + '%']
+      );
+    }
+    return this.getLocalities(cityRow.id);
+  }
+
   /**
    * 2. PIN Code Search
    */

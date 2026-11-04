@@ -66,6 +66,15 @@ export class LocationsController {
     };
   }
 
+  @Get("localities")
+  @ApiOperation({ summary: "List all active localities by city query (name, id, or slug)" })
+  getLocalitiesByQuery(@Query("city") city?: string, @Query("cityId") cityId?: string) {
+    return {
+      success: true,
+      data: this.locationsService.getLocalitiesByCityQuery(city || cityId || "")
+    };
+  }
+
   @Get("pincode/:pincode")
   @ApiOperation({ summary: "Lookup city and localities by 6-digit Indian PIN code" })
   lookupPincode(@Param("pincode") pincode: string) {
