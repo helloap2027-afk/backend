@@ -465,6 +465,8 @@ export class AuthService {
   }
 
   /**
+<<<<<<< HEAD
+=======
    * Check user registration and role status before OTP dispatch
    */
   async checkUserStatus(rawPhone: string) {
@@ -507,6 +509,7 @@ export class AuthService {
   }
 
   /**
+>>>>>>> feature/superadmin
    * Resend OTP for an existing challenge with cooldown enforcement
    */
   async resendOtp(challengeId: string) {
