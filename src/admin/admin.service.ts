@@ -2,10 +2,14 @@ import { Injectable, NotFoundException, BadRequestException } from "@nestjs/comm
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseService } from "../database/database.service";
+import { EmailService } from "./email.service";
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly emailService: EmailService
+  ) {}
 
   getDashboardStats() {
     const usersCount = (this.db.queryOne<{ count: number }>("SELECT COUNT(*) as count FROM users") || { count: 0 }).count;
@@ -129,12 +133,20 @@ export class AdminService {
       now
     ]);
 
-    // Notify Merchant of Approval
+    // Notify Merchant of Approval (In-App Notification & Dynamic Email)
     try {
       const owner = this.db.queryOne<any>(
-        "SELECT u.id, u.phone_number FROM business_owners bo JOIN users u ON bo.user_id = u.id WHERE bo.business_id = ?",
+        "SELECT u.id, u.phone_number, u.email, u.full_name FROM business_owners bo JOIN users u ON bo.user_id = u.id WHERE bo.business_id = ?",
         [id]
       );
+      const recipientEmail = owner?.email || biz.support_email;
+      if (recipientEmail) {
+        this.emailService.triggerEventEmail("MERCHANT_KYC_APPROVED", recipientEmail, {
+          business_name: biz.name,
+          first_name: owner?.full_name || biz.name,
+          city: biz.city || "Andhra Pradesh"
+        });
+      }
       const recipient = owner?.phone_number || owner?.id || "Merchant";
       this.db.execute(`
         INSERT INTO notifications (id, title, message, type, recipient, is_read, related_entity, related_id, created_at)
@@ -201,12 +213,20 @@ export class AdminService {
       now
     ]);
 
-    // Notify Merchant of Rejection & Remarks
+    // Notify Merchant of Rejection & Remarks (In-App Notification & Dynamic Email)
     try {
       const owner = this.db.queryOne<any>(
-        "SELECT u.id, u.phone_number FROM business_owners bo JOIN users u ON bo.user_id = u.id WHERE bo.business_id = ?",
+        "SELECT u.id, u.phone_number, u.email, u.full_name FROM business_owners bo JOIN users u ON bo.user_id = u.id WHERE bo.business_id = ?",
         [id]
       );
+      const recipientEmail = owner?.email || biz.support_email;
+      if (recipientEmail) {
+        this.emailService.triggerEventEmail("MERCHANT_KYC_REJECTED", recipientEmail, {
+          business_name: biz.name,
+          first_name: owner?.full_name || biz.name,
+          rejection_reason: reason || "Uploaded documents did not meet statutory compliance requirements."
+        });
+      }
       const recipient = owner?.phone_number || owner?.id || "Merchant";
       this.db.execute(`
         INSERT INTO notifications (id, title, message, type, recipient, is_read, related_entity, related_id, created_at)
