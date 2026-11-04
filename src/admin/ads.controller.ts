@@ -29,6 +29,111 @@ export class AdsController {
     };
   }
 
+  // 1.5. Dynamic Campaign Categories CRUD
+  @Get("campaign-categories")
+  getCampaignCategories(@Query("onlyActive") onlyActive?: string) {
+    return {
+      success: true,
+      data: this.adsService.getCampaignCategories(onlyActive === "true" || onlyActive === "1"),
+    };
+  }
+
+  @Post("campaign-categories")
+  createCampaignCategory(@Body() body: any) {
+    try {
+      const created = this.adsService.createCampaignCategory(body);
+      return {
+        success: true,
+        message: "Campaign category created successfully",
+        data: created,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || "Failed to create category",
+      };
+    }
+  }
+
+  @Put("campaign-categories/:id")
+  updateCampaignCategory(@Param("id") id: string, @Body() body: any) {
+    try {
+      const res = this.adsService.updateCampaignCategory(id, body);
+      return {
+        success: true,
+        message: `Category updated successfully. Auto-reflected in ${res.affectedCampaignsCount} existing campaigns.`,
+        data: res,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || "Failed to update category",
+      };
+    }
+  }
+
+  @Delete("campaign-categories/:id")
+  deleteCampaignCategory(@Param("id") id: string, @Query("fallback") fallback?: string) {
+    try {
+      const res = this.adsService.deleteCampaignCategory(id, fallback || "General");
+      return {
+        success: true,
+        message: `Category deleted successfully. ${res.reassignedCampaignsCount} campaigns reassigned to ${res.fallbackCategoryName}.`,
+        data: res,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || "Failed to delete category",
+      };
+    }
+  }
+
+
+  // 1.6. Global Push Notification Settings
+  @Get("push-settings")
+  getPushSettings() {
+    return {
+      success: true,
+      data: this.adsService.getGlobalPushSettings(),
+    };
+  }
+
+  @Put("push-settings")
+  updatePushSettings(@Body() body: any) {
+    try {
+      const updated = this.adsService.updateGlobalPushSettings(body);
+      return {
+        success: true,
+        message: "Global push notification settings updated successfully",
+        data: updated,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || "Failed to update global push settings",
+      };
+    }
+  }
+
+  @Post("push-settings/test")
+  @HttpCode(200)
+  sendTestPush(@Body() body: any) {
+    try {
+      const res = this.adsService.sendTestPushNotification(body);
+      return {
+        success: true,
+        message: "Test push notification dispatched successfully",
+        data: res,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || "Failed to dispatch test push notification",
+      };
+    }
+  }
+
   // 2. Campaign Push Notifications
   @Get("campaigns")
   getCampaigns(

@@ -626,6 +626,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
     
+      CREATE TABLE IF NOT EXISTS campaign_categories (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        slug TEXT UNIQUE NOT NULL,
+        description TEXT,
+        color TEXT DEFAULT '#0076D7',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS ad_campaigns (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -719,6 +730,188 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+            CREATE TABLE IF NOT EXISTS push_global_settings (
+        id TEXT PRIMARY KEY,
+        app_name TEXT DEFAULT 'HELLO — Hyperlocal Discovery',
+        app_logo_url TEXT DEFAULT 'https://hello-hi.in/logo.png',
+        small_icon_name TEXT DEFAULT 'ic_stat_hello',
+        accent_color TEXT DEFAULT '#0076D7',
+        default_banner_url TEXT,
+        sound_mode TEXT DEFAULT 'DEFAULT',
+        vibration_enabled INTEGER DEFAULT 1,
+        quiet_hours_enabled INTEGER DEFAULT 1,
+        quiet_hours_start TEXT DEFAULT '22:00',
+        quiet_hours_end TEXT DEFAULT '07:00',
+        promotional_frequency_cap INTEGER DEFAULT 2,
+        campaign_ttl_hours INTEGER DEFAULT 24,
+        normal_push_ttl_hours INTEGER DEFAULT 4,
+        default_deep_link TEXT DEFAULT 'hello://home',
+        kill_switch_promotional INTEGER DEFAULT 0,
+        provider_mode TEXT DEFAULT 'SIMULATION',
+        updated_at TEXT NOT NULL
+      );
+      
+      -- =========================================================================
+      -- ENTERPRISE GLOBAL EMAIL MANAGEMENT SYSTEM SCHEMA
+      -- =========================================================================
+      CREATE TABLE IF NOT EXISTS email_global_settings (
+        id TEXT PRIMARY KEY,
+        active_provider TEXT DEFAULT 'SMTP',
+        smtp_host TEXT DEFAULT 'smtp.hello-hi.in',
+        smtp_port INTEGER DEFAULT 587,
+        smtp_encryption TEXT DEFAULT 'STARTTLS',
+        smtp_username TEXT DEFAULT 'system@hello-hi.in',
+        smtp_password_masked TEXT DEFAULT '••••••••••••',
+        connection_timeout INTEGER DEFAULT 10000,
+        default_sender_name TEXT DEFAULT 'HELLO — Hyperlocal Discovery',
+        default_sender_email TEXT DEFAULT 'no-reply@hello-hi.in',
+        reply_to_email TEXT DEFAULT 'support@hello-hi.in',
+        support_email TEXT DEFAULT 'care@hello-hi.in',
+        support_phone TEXT DEFAULT '+91 98480 22338',
+        company_legal_name TEXT DEFAULT 'HELLO Hyperlocal Services Pvt Ltd',
+        company_address TEXT DEFAULT 'Benz Circle, MG Road, Vijayawada, Andhra Pradesh - 520010',
+        default_timezone TEXT DEFAULT 'Asia/Kolkata',
+        max_delivery_attempts INTEGER DEFAULT 3,
+        rate_limit_per_minute INTEGER DEFAULT 120,
+        promotional_suppression_enabled INTEGER DEFAULT 1,
+        spf_status TEXT DEFAULT 'VERIFIED',
+        dkim_status TEXT DEFAULT 'VERIFIED',
+        dmarc_status TEXT DEFAULT 'CONFIGURED',
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS email_branding_layouts (
+        id TEXT PRIMARY KEY,
+        layout_name TEXT NOT NULL,
+        is_default INTEGER DEFAULT 1,
+        logo_url TEXT DEFAULT 'https://hello-hi.in/logo.png',
+        logo_dimensions TEXT DEFAULT '140x44',
+        logo_alignment TEXT DEFAULT 'center',
+        header_bg_color TEXT DEFAULT '#FFFFFF',
+        header_padding TEXT DEFAULT '24px 20px',
+        header_tagline TEXT DEFAULT 'Discover Local. Connect Instantly.',
+        website_url TEXT DEFAULT 'https://hello-hi.in',
+        content_width INTEGER DEFAULT 600,
+        body_bg_color TEXT DEFAULT '#F8FAFC',
+        surface_bg_color TEXT DEFAULT '#FFFFFF',
+        heading_color TEXT DEFAULT '#0B1220',
+        body_text_color TEXT DEFAULT '#334155',
+        primary_accent_color TEXT DEFAULT '#0076D7',
+        cta_button_bg TEXT DEFAULT '#0076D7',
+        cta_button_text TEXT DEFAULT '#FFFFFF',
+        footer_bg_color TEXT DEFAULT '#0B1220',
+        footer_text_color TEXT DEFAULT '#94A3B8',
+        footer_tagline TEXT DEFAULT 'Discover Local. Connect Instantly.',
+        footer_about_text TEXT DEFAULT 'HELLO connects millions of consumers with verified local businesses, stores, and home service providers across Andhra Pradesh.',
+        copyright_text TEXT DEFAULT '© 2026 HELLO. All rights reserved.',
+        is_published INTEGER DEFAULT 1,
+        version TEXT DEFAULT 'v1.0',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS email_footer_apps (
+        id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        store_url TEXT NOT NULL,
+        badge_asset_url TEXT NOT NULL,
+        alt_text TEXT NOT NULL,
+        display_order INTEGER DEFAULT 1,
+        is_enabled INTEGER DEFAULT 1,
+        is_verified INTEGER DEFAULT 1,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS email_footer_socials (
+        id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        destination_url TEXT NOT NULL,
+        icon_asset_url TEXT NOT NULL,
+        alt_text TEXT NOT NULL,
+        display_order INTEGER DEFAULT 1,
+        is_enabled INTEGER DEFAULT 1,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS email_templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        template_key TEXT UNIQUE NOT NULL,
+        category TEXT DEFAULT 'TRANSACTIONAL',
+        subject_template TEXT NOT NULL,
+        preheader_text TEXT,
+        heading_text TEXT,
+        greeting_text TEXT,
+        body_html TEXT NOT NULL,
+        cta_label TEXT,
+        cta_url TEXT,
+        banner_image_url TEXT,
+        layout_id TEXT DEFAULT 'layout_default',
+        language TEXT DEFAULT 'en',
+        status TEXT DEFAULT 'PUBLISHED',
+        version TEXT DEFAULT 'v1.0',
+        created_by TEXT DEFAULT 'Super Admin',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS email_event_mappings (
+        id TEXT PRIMARY KEY,
+        event_key TEXT UNIQUE NOT NULL,
+        event_name TEXT NOT NULL,
+        event_description TEXT,
+        recipient_type TEXT NOT NULL,
+        template_key TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        is_system_protected INTEGER DEFAULT 0,
+        trigger_source TEXT DEFAULT 'BACKEND_SERVICE',
+        last_triggered_at TEXT,
+        last_result TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS email_campaigns (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        preheader TEXT,
+        template_key TEXT,
+        body_content TEXT,
+        cta_label TEXT,
+        cta_url TEXT,
+        target_audience TEXT DEFAULT 'ALL_CUSTOMERS',
+        target_city TEXT DEFAULT 'All',
+        scheduled_at TEXT,
+        status TEXT DEFAULT 'DRAFT',
+        estimated_recipients INTEGER DEFAULT 0,
+        sent_count INTEGER DEFAULT 0,
+        delivered_count INTEGER DEFAULT 0,
+        failed_count INTEGER DEFAULT 0,
+        created_by TEXT DEFAULT 'Super Admin',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS email_delivery_logs (
+        id TEXT PRIMARY KEY,
+        email_ref TEXT UNIQUE NOT NULL,
+        email_category TEXT NOT NULL,
+        recipient_email TEXT NOT NULL,
+        recipient_masked TEXT NOT NULL,
+        sender_email TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        template_key TEXT,
+        campaign_id TEXT,
+        provider TEXT DEFAULT 'SMTP',
+        delivery_status TEXT NOT NULL,
+        error_message TEXT,
+        retry_count INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        submitted_at TEXT,
+        delivered_at TEXT
+      );
       CREATE TABLE IF NOT EXISTS normal_push_logs (
         id TEXT PRIMARY KEY,
         notification_ref TEXT UNIQUE NOT NULL,
@@ -752,12 +945,113 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private seedDefaults() {
     const now = new Date().toISOString();
 
-    // 1. Roles - Always guarantee core system roles exist
+// 1. Roles - Always guarantee core system roles exist
     const insertRole = this.db.prepare("INSERT OR IGNORE INTO roles (id, name, description) VALUES (?, ?, ?)");
     insertRole.run("role-cust", "CUSTOMER", "Consumer discovering local businesses and sending leads");
     insertRole.run("role-owner", "VENDOR_OWNER", "Business owner with full rights over business profiles and staff");
     insertRole.run("role-staff", "VENDOR_STAFF", "Business staff managing assigned leads");
     insertRole.run("role-superadmin", "SUPER_ADMIN", "Platform root administrative privileges");
+
+// Global Push Notification Settings Default Seed
+    try {
+      this.db.exec(`
+        INSERT OR IGNORE INTO push_global_settings (
+          id, app_name, app_logo_url, small_icon_name, accent_color, sound_mode, vibration_enabled,
+          quiet_hours_enabled, quiet_hours_start, quiet_hours_end, promotional_frequency_cap,
+          campaign_ttl_hours, normal_push_ttl_hours, default_deep_link, kill_switch_promotional, provider_mode, updated_at
+        ) VALUES (
+          'global_push_config', 'HELLO — Hyperlocal Discovery', 'https://hello-hi.in/logo.png', 'ic_stat_hello', '#0076D7',
+          'DEFAULT', 1, 1, '22:00', '07:00', 2, 24, 4, 'hello://home', 0, 'SIMULATION', datetime('now')
+        );
+      `);
+    } catch {}
+        // Enterprise Global Email Management Default Seeds
+    try {
+      const nowIso = new Date().toISOString();
+      this.db.exec(`
+        INSERT OR IGNORE INTO email_global_settings (
+          id, active_provider, smtp_host, smtp_port, smtp_encryption, smtp_username,
+          smtp_password_masked, default_sender_name, default_sender_email, reply_to_email,
+          support_email, company_legal_name, updated_at
+        ) VALUES (
+          'global_email_config', 'SMTP', 'smtp.hello-hi.in', 587, 'STARTTLS', 'system@hello-hi.in',
+          '••••••••••••', 'HELLO — Hyperlocal Discovery', 'no-reply@hello-hi.in', 'support@hello-hi.in',
+          'care@hello-hi.in', 'HELLO Hyperlocal Services Pvt Ltd', '${nowIso}'
+        );
+
+        INSERT OR IGNORE INTO email_branding_layouts (
+          id, layout_name, is_default, logo_url, header_tagline, website_url, content_width,
+          primary_accent_color, cta_button_bg, footer_bg_color, footer_about_text, is_published, version, created_at, updated_at
+        ) VALUES (
+          'layout_default', 'Official HELLO Master Brand Layout', 1, 'https://hello-hi.in/logo.png',
+          'Discover Local. Connect Instantly.', 'https://hello-hi.in', 600,
+          '#0076D7', '#0076D7', '#0B1220',
+          'HELLO connects millions of consumers with verified local businesses, stores, and home service providers across Andhra Pradesh.',
+          1, 'v1.0', '${nowIso}', '${nowIso}'
+        );
+
+        INSERT OR IGNORE INTO email_footer_apps (id, platform, display_name, store_url, badge_asset_url, alt_text, display_order, is_enabled, is_verified, updated_at) VALUES
+        ('app_gplay', 'GOOGLE_PLAY', 'Google Play', 'https://play.google.com/store/apps/details?id=in.hellohi.customer', 'https://hello-hi.in/assets/badges/google-play-badge.png', 'Get it on Google Play', 1, 1, 1, '${nowIso}'),
+        ('app_appstore', 'APP_STORE', 'Apple App Store', 'https://apps.apple.com/in/app/hello-hyperlocal/id647123456', 'https://hello-hi.in/assets/badges/app-store-badge.png', 'Download on the App Store', 2, 1, 1, '${nowIso}');
+
+        INSERT OR IGNORE INTO email_footer_socials (id, platform, display_name, destination_url, icon_asset_url, alt_text, display_order, is_enabled, updated_at) VALUES
+        ('soc_fb', 'FACEBOOK', 'Facebook', 'https://facebook.com/hellohi.in', 'https://hello-hi.in/assets/icons/facebook.png', 'Follow HELLO on Facebook', 1, 1, '${nowIso}'),
+        ('soc_ig', 'INSTAGRAM', 'Instagram', 'https://instagram.com/hellohi.in', 'https://hello-hi.in/assets/icons/instagram.png', 'Follow HELLO on Instagram', 2, 1, '${nowIso}'),
+        ('soc_x', 'TWITTER_X', 'X (Twitter)', 'https://x.com/hellohi_in', 'https://hello-hi.in/assets/icons/x.png', 'Follow HELLO on X', 3, 1, '${nowIso}'),
+        ('soc_li', 'LINKEDIN', 'LinkedIn', 'https://linkedin.com/company/hello-hyperlocal', 'https://hello-hi.in/assets/icons/linkedin.png', 'Connect on LinkedIn', 4, 1, '${nowIso}'),
+        ('soc_yt', 'YOUTUBE', 'YouTube', 'https://youtube.com/@hellohi_in', 'https://hello-hi.in/assets/icons/youtube.png', 'Watch on YouTube', 5, 1, '${nowIso}'),
+        ('soc_wa', 'WHATSAPP', 'WhatsApp Care', 'https://wa.me/919848022338', 'https://hello-hi.in/assets/icons/whatsapp.png', 'Chat on WhatsApp', 6, 1, '${nowIso}');
+
+        INSERT OR IGNORE INTO email_templates (
+          id, name, template_key, category, subject_template, preheader_text, heading_text, greeting_text,
+          body_html, cta_label, cta_url, status, version, created_at, updated_at
+        ) VALUES
+        ('tmpl_welcome_cust', 'Customer Welcome Onboarding', 'CUSTOMER_WELCOME', 'TRANSACTIONAL', 'Welcome to HELLO, {{first_name}}! Discover Top Businesses Near You', 'Explore verified stores, doctors, and services in {{city}}.', 'Welcome to HELLO', 'Hello {{first_name}},', '<p>Your account is ready. Discover verified local businesses, connect with nearby merchants, and request instant callback quotes across Vijayawada, Guntur and Andhra Pradesh.</p>', 'Explore HELLO', 'https://hello-hi.in', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
+        ('tmpl_enquiry_rcvd', 'Merchant New Lead Alert', 'MERCHANT_NEW_ENQUIRY', 'TRANSACTIONAL', 'New Customer Enquiry Received: {{service_name}} [Ref: {{enquiry_reference}}]', 'A verified customer in {{locality}} requested a callback.', 'New Enquiry Alert', 'Hello {{business_name}},', '<p>A customer has just requested details for <strong>{{service_name}}</strong> in your area. Log in to your merchant dashboard to respond immediately.</p>', 'Open Enquiry', 'https://hello-hi.in/merchant/enquiries', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
+        ('tmpl_kyc_approved', 'Merchant KYC Verification Approved', 'MERCHANT_KYC_APPROVED', 'TRANSACTIONAL', 'Congratulations! Your Merchant Listing {{business_name}} is Live', 'Your verified trust badge is now activated on HELLO.', 'KYC Approved & Verified', 'Hello {{business_name}},', '<p>Your KYC documentation has been reviewed and verified by our compliance team. Your business profile is now live with the green verified trust badge.</p>', 'View Live Profile', 'https://hello-hi.in/business/profile', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
+        ('tmpl_sub_activated', 'Merchant Subscription Pro Activated', 'SUBSCRIPTION_ACTIVATED', 'TRANSACTIONAL', 'Payment Received: Growth Merchant Pro Subscription Active', 'Tax Invoice and receipt for your subscription.', 'Subscription Activated', 'Dear Partner,', '<p>We received your subscription payment of {{amount}} for <strong>Growth Merchant Pro</strong>. Your premium priority placement is now active for 30 days.</p>', 'Download Invoice', 'https://hello-hi.in/merchant/invoices', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}');
+
+        INSERT OR IGNORE INTO email_event_mappings (
+          id, event_key, event_name, event_description, recipient_type, template_key, is_active, is_system_protected, updated_at
+        ) VALUES
+        ('evt_1', 'CUSTOMER_WELCOME', 'Customer Registration Welcome', 'Triggered when a consumer completes OTP sign-up', 'CUSTOMER', 'CUSTOMER_WELCOME', 1, 1, '${nowIso}'),
+        ('evt_2', 'MERCHANT_NEW_ENQUIRY', 'New Enquiry Notification', 'Triggered when a lead is submitted to a merchant', 'MERCHANT', 'MERCHANT_NEW_ENQUIRY', 1, 1, '${nowIso}'),
+        ('evt_3', 'MERCHANT_KYC_APPROVED', 'Business KYC Verification Approved', 'Triggered upon Super Admin KYC approval', 'MERCHANT', 'MERCHANT_KYC_APPROVED', 1, 1, '${nowIso}'),
+        ('evt_4', 'SUBSCRIPTION_ACTIVATED', 'Subscription Pro Paid & Activated', 'Triggered upon successful gateway payment', 'MERCHANT', 'SUBSCRIPTION_ACTIVATED', 1, 0, '${nowIso}');
+
+        INSERT OR IGNORE INTO email_delivery_logs (
+          id, email_ref, email_category, recipient_email, recipient_masked, sender_email, subject, template_key, provider, delivery_status, created_at, submitted_at, delivered_at
+        ) VALUES
+        ('log_1', 'EML-TXN-90812', 'TRANSACTIONAL', 'vijay.k@gmail.com', 'v***k@gmail.com', 'no-reply@hello-hi.in', 'Welcome to HELLO, Vijay! Discover Top Businesses Near You', 'CUSTOMER_WELCOME', 'SMTP', 'DELIVERED', datetime('now', '-2 hours'), datetime('now', '-2 hours'), datetime('now', '-2 hours')),
+        ('log_2', 'EML-TXN-90813', 'TRANSACTIONAL', 'amravati.grand@gmail.com', 'a***d@gmail.com', 'no-reply@hello-hi.in', 'New Customer Enquiry Received: Catering [Ref: ENQ-8902]', 'MERCHANT_NEW_ENQUIRY', 'SMTP', 'DELIVERED', datetime('now', '-4 hours'), datetime('now', '-4 hours'), datetime('now', '-4 hours')),
+        ('log_3', 'EML-TXN-90814', 'TRANSACTIONAL', 'siri.dental@gmail.com', 's***l@gmail.com', 'no-reply@hello-hi.in', 'Congratulations! Your Merchant Listing Siri Dental Clinic is Live', 'MERCHANT_KYC_APPROVED', 'SMTP', 'DELIVERED', datetime('now', '-1 days'), datetime('now', '-1 days'), datetime('now', '-1 days')),
+        ('log_4', 'EML-TXN-90815', 'TRANSACTIONAL', 'apex.cars@gmail.com', 'a***s@gmail.com', 'no-reply@hello-hi.in', 'Payment Received: Growth Merchant Pro Subscription Active', 'SUBSCRIPTION_ACTIVATED', 'SMTP', 'DELIVERED', datetime('now', '-2 days'), datetime('now', '-2 days'), datetime('now', '-2 days'));
+      `);
+    } catch (e) {
+      console.error('Error seeding email management:', e);
+    }
+
+    // Campaign Categories Default Seed
+    try {
+      this.db.exec(`
+        INSERT OR IGNORE INTO campaign_categories (id, name, slug, description, color, is_active, created_at, updated_at) VALUES
+        ('cat_1', 'Electronics', 'electronics', 'Consumer electronics, appliances and gadgets', '#0076D7', 1, datetime('now'), datetime('now')),
+        ('cat_2', 'Home Services', 'home-services', 'Plumbing, cleaning, electricians and home repair', '#FF6B35', 1, datetime('now'), datetime('now')),
+        ('cat_3', 'Health & Medical', 'health-medical', 'Clinics, diagnostic centers, pharmacy & wellness', '#16A34A', 1, datetime('now'), datetime('now')),
+        ('cat_4', 'Restaurants', 'restaurants', 'Dining, food delivery, cafes and sweet shops', '#E11D48', 1, datetime('now'), datetime('now')),
+        ('cat_5', 'General', 'general', 'General promotional announcements and offers', '#64748B', 1, datetime('now'), datetime('now'));
+      `);
+    } catch {}
+
+    // 1. Roles
+    const rolesCount = this.db.prepare("SELECT COUNT(*) as count FROM roles").get() as { count: number };
+    if (rolesCount.count === 0) {
+      const insertRole = this.db.prepare("INSERT INTO roles (id, name, description) VALUES (?, ?, ?)");
+      insertRole.run("role-cust", "CUSTOMER", "Consumer discovering local businesses and sending leads");
+      insertRole.run("role-owner", "VENDOR_OWNER", "Business owner with full rights over business profiles and staff");
+      insertRole.run("role-staff", "VENDOR_STAFF", "Business staff managing assigned leads");
+      insertRole.run("role-superadmin", "SUPER_ADMIN", "Platform root administrative privileges");
+    }
 
     // 1b. Default Super Administrator
     let superAdmin = this.db.prepare("SELECT * FROM users WHERE id = 'usr_super_admin' OR email = 'admin@hello-hi.in'").get() as any;
