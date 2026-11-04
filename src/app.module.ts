@@ -9,6 +9,7 @@ import { EnquiriesModule } from "./enquiries/enquiries.module";
 import { ReviewsModule } from "./reviews/reviews.module";
 import { AdminModule } from "./admin/admin.module";
 import { CmsModule } from "./cms/cms.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 import { HealthController } from "./health/health.controller";
 
 @Module({
@@ -23,6 +24,7 @@ import { HealthController } from "./health/health.controller";
     ReviewsModule,
     AdminModule,
     CmsModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
   providers: [],

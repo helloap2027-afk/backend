@@ -1,9 +1,14 @@
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
+import { NestExpressApplication } from "@nestjs/platform-express";
+import * as path from "node:path";
+import * as fs from "node:fs";
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
 
   // Global API Prefix
   app.setGlobalPrefix("api/v1");
@@ -11,6 +16,18 @@ async function bootstrap() {
   // Disable ETag to prevent 304 empty body responses on mobile
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.set("etag", false);
+
+  // Allow up to 50MB for image / document base64 uploads
+  const express = require("express");
+  expressApp.use(express.json({ limit: "50mb" }));
+  expressApp.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // Serve static uploaded media
+  const uploadsDir = path.resolve(process.cwd(), "uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  app.useStaticAssets(uploadsDir, { prefix: "/uploads" });
 
   // Global no-cache header for dynamic JSON APIs
   app.use((req: any, res: any, next: any) => {
@@ -31,7 +48,11 @@ async function bootstrap() {
     allowedHeaders: [
       "Content-Type",
       "Authorization",
+      "authorization",
+      "x-user-id",
+      "X-User-Id",
       "X-Business-Id",
+      "x-business-id",
       "X-Requested-With",
       "Accept",
       "If-None-Match",
