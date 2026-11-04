@@ -951,6 +951,347 @@ export class AdminService {
     };
   }
 
+  // =========================================================================
+  // ENTERPRISE STAGE 1: BENEFITS LIBRARY & CAPABILITIES API
+  // =========================================================================
+
+  getBackendCapabilities() {
+    return this.db.query<any>("SELECT * FROM backend_capabilities ORDER BY enforcement_status DESC, name ASC");
+  }
+
+  getBenefitDefinitions(query?: { category?: string; status?: string; search?: string }) {
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (query?.category && query.category !== "ALL") {
+      conditions.push("category = ?");
+      params.push(query.category);
+    }
+
+    if (query?.status && query.status !== "ALL") {
+      if (query.status === "ACTIVE") conditions.push("is_active = 1");
+      else if (query.status === "INACTIVE") conditions.push("is_active = 0");
+      else {
+        conditions.push("enforcement_status = ?");
+        params.push(query.status);
+      }
+    }
+
+    if (query?.search && query.search.trim()) {
+      conditions.push("(name LIKE ? OR benefit_key LIKE ? OR description LIKE ?)");
+      const term = `%${query.search.trim()}%`;
+      params.push(term, term, term);
+    }
+
+    const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
+    const list = this.db.query<any>(`SELECT * FROM benefit_definitions ${where} ORDER BY display_order ASC, created_at DESC`, params);
+
+    return list.map(b => ({
+      ...b,
+      supported_audiences: typeof b.supported_audiences === "string" ? JSON.parse(b.supported_audiences) : b.supported_audiences,
+      allowed_values: b.allowed_values ? (typeof b.allowed_values === "string" ? JSON.parse(b.allowed_values) : b.allowed_values) : null
+    }));
+  }
+
+  getBenefitById(id: string) {
+    const ben = this.db.queryOne<any>("SELECT * FROM benefit_definitions WHERE id = ? OR benefit_key = ?", [id, id]);
+    if (!ben) {
+      throw new NotFoundException(`Benefit definition '${id}' not found`);
+    }
+    return {
+      ...ben,
+      supported_audiences: typeof ben.supported_audiences === "string" ? JSON.parse(ben.supported_audiences) : ben.supported_audiences,
+      allowed_values: ben.allowed_values ? (typeof ben.allowed_values === "string" ? JSON.parse(ben.allowed_values) : ben.allowed_values) : null
+    };
+  }
+
+  createBenefitDefinition(payload: any, actorId: string = "super-admin") {
+    if (!payload.benefit_key || !payload.name) {
+      throw new BadRequestException("Benefit key and display name are required");
+    }
+
+    const key = payload.benefit_key.trim().toLowerCase();
+    const existing = this.db.queryOne<any>("SELECT * FROM benefit_definitions WHERE benefit_key = ?", [key]);
+    if (existing) {
+      throw new BadRequestException(`A benefit with key '${key}' already exists.`);
+    }
+
+    // Strict validation: Verify backend capability binding
+    let enforcementStatus = "DISPLAY_ONLY";
+    if (payload.capability_binding) {
+      const cap = this.db.queryOne<any>("SELECT * FROM backend_capabilities WHERE capability_key = ?", [payload.capability_binding]);
+      if (cap && cap.enforcement_status === "ENFORCED") {
+        enforcementStatus = "ENFORCED";
+      } else if (cap) {
+        enforcementStatus = "UNVERIFIED";
+      }
+    }
+
+    const id = payload.id || `ben_${Date.now()}`;
+    const now = new Date().toISOString();
+
+    this.db.execute(`
+      INSERT INTO benefit_definitions (
+        id, benefit_key, name, description, category, data_type, unit, default_value,
+        min_value, max_value, allowed_values, reset_period, supported_audiences,
+        capability_binding, enforcement_status, is_active, display_order, icon, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      id,
+      key,
+      payload.name.trim(),
+      payload.description || "",
+      payload.category || "GENERAL",
+      payload.data_type || "BOOLEAN",
+      payload.unit || null,
+      payload.default_value !== undefined ? String(payload.default_value) : null,
+      payload.min_value !== undefined ? Number(payload.min_value) : null,
+      payload.max_value !== undefined ? Number(payload.max_value) : null,
+      payload.allowed_values ? (typeof payload.allowed_values === "string" ? payload.allowed_values : JSON.stringify(payload.allowed_values)) : null,
+      payload.reset_period || "NONE",
+      payload.supported_audiences ? (typeof payload.supported_audiences === "string" ? payload.supported_audiences : JSON.stringify(payload.supported_audiences)) : '["BUSINESS"]',
+      payload.capability_binding || null,
+      enforcementStatus,
+      payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : 1,
+      payload.display_order ? Number(payload.display_order) : 0,
+      payload.icon || "CheckCircle",
+      now,
+      now
+    ]);
+
+    const auditId = `audit-${Date.now()}`;
+    try {
+      this.db.execute(`
+        INSERT INTO audit_logs (id, actor_user_id, action, entity_name, entity_id, payload_before, payload_after, created_at)
+        VALUES (?, ?, 'BENEFIT_CREATED', 'benefit_definitions', ?, NULL, ?, ?)
+      `, [auditId, actorId, id, JSON.stringify(payload), now]);
+    } catch {}
+
+    return {
+      success: true,
+      message: `Benefit definition '${payload.name}' created with status ${enforcementStatus}.`,
+      data: this.getBenefitById(id)
+    };
+  }
+
+  updateBenefitDefinition(id: string, payload: any, actorId: string = "super-admin") {
+    const existing = this.db.queryOne<any>("SELECT * FROM benefit_definitions WHERE id = ?", [id]);
+    if (!existing) {
+      throw new NotFoundException(`Benefit definition '${id}' not found`);
+    }
+
+    let enforcementStatus = existing.enforcement_status;
+    const binding = payload.capability_binding !== undefined ? payload.capability_binding : existing.capability_binding;
+    if (binding) {
+      const cap = this.db.queryOne<any>("SELECT * FROM backend_capabilities WHERE capability_key = ?", [binding]);
+      enforcementStatus = cap?.enforcement_status === "ENFORCED" ? "ENFORCED" : (cap ? "UNVERIFIED" : "DISPLAY_ONLY");
+    } else {
+      enforcementStatus = "DISPLAY_ONLY";
+    }
+
+    const now = new Date().toISOString();
+    this.db.execute(`
+      UPDATE benefit_definitions SET
+        name = COALESCE(?, name),
+        description = COALESCE(?, description),
+        category = COALESCE(?, category),
+        unit = COALESCE(?, unit),
+        default_value = COALESCE(?, default_value),
+        min_value = COALESCE(?, min_value),
+        max_value = COALESCE(?, max_value),
+        allowed_values = COALESCE(?, allowed_values),
+        reset_period = COALESCE(?, reset_period),
+        capability_binding = ?,
+        enforcement_status = ?,
+        is_active = COALESCE(?, is_active),
+        display_order = COALESCE(?, display_order),
+        updated_at = ?
+      WHERE id = ?
+    `, [
+      payload.name ?? null,
+      payload.description ?? null,
+      payload.category ?? null,
+      payload.unit ?? null,
+      payload.default_value !== undefined ? String(payload.default_value) : null,
+      payload.min_value !== undefined ? Number(payload.min_value) : null,
+      payload.max_value !== undefined ? Number(payload.max_value) : null,
+      payload.allowed_values ? (typeof payload.allowed_values === "string" ? payload.allowed_values : JSON.stringify(payload.allowed_values)) : null,
+      payload.reset_period ?? null,
+      binding,
+      enforcementStatus,
+      payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : null,
+      payload.display_order !== undefined ? Number(payload.display_order) : null,
+      now,
+      id
+    ]);
+
+    return {
+      success: true,
+      message: `Benefit '${existing.name}' updated successfully.`,
+      data: this.getBenefitById(id)
+    };
+  }
+
+  // =========================================================================
+  // ENTERPRISE STAGE 1: PLAN BENEFIT ASSIGNMENTS & IMMUTABLE VERSIONS
+  // =========================================================================
+
+  getPlanDetailsWithBenefits(planId: string) {
+    const plan = this.db.queryOne<any>("SELECT * FROM subscription_plans WHERE id = ?", [planId]);
+    if (!plan) {
+      throw new NotFoundException(`Plan '${planId}' not found`);
+    }
+
+    // Retrieve structured benefit assignments
+    const assignments = this.db.query<any>(`
+      SELECT 
+        pba.id as assignment_id,
+        pba.assigned_value,
+        pba.display_order,
+        pba.is_visible,
+        pba.is_highlighted,
+        bd.id as benefit_id,
+        bd.benefit_key,
+        bd.name as benefit_name,
+        bd.category as benefit_category,
+        bd.data_type,
+        bd.unit,
+        bd.enforcement_status,
+        bd.capability_binding
+      FROM plan_benefit_assignments pba
+      JOIN benefit_definitions bd ON pba.benefit_id = bd.id
+      WHERE pba.plan_id = ?
+      ORDER BY pba.display_order ASC
+    `, [planId]);
+
+    // Active subscriber count
+    const subCount = this.db.queryOne<{ count: number }>(
+      "SELECT COUNT(*) as count FROM subscriptions WHERE plan_id = ? AND status = 'ACTIVE'",
+      [planId]
+    );
+
+    // Latest version snapshot
+    const versions = this.db.query<any>(
+      "SELECT * FROM plan_versions WHERE plan_id = ? ORDER BY version_number DESC",
+      [planId]
+    );
+
+    return {
+      ...plan,
+      features: typeof plan.features === "string" ? JSON.parse(plan.features) : plan.features,
+      benefits: assignments,
+      activeSubscribers: subCount?.count || 0,
+      versions: versions.map(v => ({
+        ...v,
+        features_snapshot: typeof v.features_snapshot === "string" ? JSON.parse(v.features_snapshot) : v.features_snapshot,
+        benefits_snapshot: typeof v.benefits_snapshot === "string" ? JSON.parse(v.benefits_snapshot) : v.benefits_snapshot,
+      }))
+    };
+  }
+
+  assignBenefitsToPlan(planId: string, benefits: { benefit_id: string; assigned_value: any; display_order?: number; is_visible?: number; is_highlighted?: number }[], actorId: string = "super-admin") {
+    const plan = this.db.queryOne<any>("SELECT * FROM subscription_plans WHERE id = ?", [planId]);
+    if (!plan) {
+      throw new NotFoundException(`Plan '${planId}' not found`);
+    }
+
+    const now = new Date().toISOString();
+
+    // Delete existing assignments and replace atomically
+    this.db.execute("DELETE FROM plan_benefit_assignments WHERE plan_id = ?", [planId]);
+
+    const sql = `
+      INSERT INTO plan_benefit_assignments (id, plan_id, benefit_id, assigned_value, display_order, is_visible, is_highlighted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    benefits.forEach((b, idx) => {
+      this.db.execute(sql, [
+        `pba_${Date.now()}_${idx}`,
+        planId,
+        b.benefit_id,
+        String(b.assigned_value),
+        b.display_order ?? (idx + 1),
+        b.is_visible !== undefined ? b.is_visible : 1,
+        b.is_highlighted !== undefined ? b.is_highlighted : 0,
+        now,
+        now
+      ]);
+    });
+
+    return {
+      success: true,
+      message: `${benefits.length} benefit(s) assigned to plan '${plan.name}'.`,
+      plan: this.getPlanDetailsWithBenefits(planId)
+    };
+  }
+
+  publishPlanVersion(planId: string, payload: { changeSummary?: string }, actorId: string = "super-admin") {
+    const plan = this.getPlanDetailsWithBenefits(planId);
+
+    // Strict validation: Ensure operational benefits are valid
+    for (const b of plan.benefits) {
+      if (b.data_type === "INTEGER" || b.data_type === "QUOTA") {
+        const num = Number(b.assigned_value);
+        if (isNaN(num) || num < 0) {
+          throw new BadRequestException(`Operational benefit '${b.benefit_name}' has an invalid quota value: ${b.assigned_value}. Negative or non-numeric quotas are prohibited.`);
+        }
+      }
+    }
+
+    const latestVer = this.db.queryOne<{ max_ver: number }>(
+      "SELECT MAX(version_number) as max_ver FROM plan_versions WHERE plan_id = ?",
+      [planId]
+    );
+
+    const nextVer = (latestVer?.max_ver || 0) + 1;
+    const now = new Date().toISOString();
+    const verId = `ver_${planId}_v${nextVer}`;
+
+    const featuresSnapshot = JSON.stringify(plan.features || []);
+    const benefitsSnapshot = JSON.stringify(
+      plan.benefits.map((b: any) => ({
+        key: b.benefit_key,
+        name: b.benefit_name,
+        value: b.assigned_value,
+        dataType: b.data_type,
+        enforcement: b.enforcement_status,
+        capability: b.capability_binding
+      }))
+    );
+
+    this.db.execute(`
+      INSERT INTO plan_versions (
+        id, plan_id, version_number, name, plan_code, price, currency, billing_interval,
+        features_snapshot, benefits_snapshot, published_by, change_summary, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      verId,
+      planId,
+      nextVer,
+      plan.name,
+      plan.name.toUpperCase().replace(/\s+/g, "_"),
+      plan.price,
+      plan.currency || "INR",
+      plan.billing_interval || "MONTHLY",
+      featuresSnapshot,
+      benefitsSnapshot,
+      actorId,
+      payload.changeSummary || `Published production release version v${nextVer}.0`,
+      now
+    ]);
+
+    // Update plan status to ACTIVE
+    this.db.execute("UPDATE subscription_plans SET status = 'ACTIVE', updated_at = ? WHERE id = ?", [now, planId]);
+
+    return {
+      success: true,
+      message: `Plan '${plan.name}' published successfully as version v${nextVer}.0!`,
+      versionNumber: nextVer,
+      versionId: verId
+    };
+  }
+
   getSubscriptionById(id: string) {
     const sub = this.db.queryOne<any>("SELECT * FROM subscriptions WHERE id = ?", [id]);
     if (!sub) {
