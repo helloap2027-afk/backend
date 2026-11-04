@@ -47,6 +47,232 @@ export class AdsService {
     };
   }
 
+  // ================= 1.5. CAMPAIGN CATEGORIES CRUD & AUTO CASCADE ================= //
+  getCampaignCategories(onlyActive: boolean = false) {
+    const where = onlyActive ? "WHERE is_active = 1" : "";
+    const categories = this.db.query(
+      `SELECT c.*, (SELECT COUNT(*) FROM ad_campaigns WHERE category = c.name) as campaigns_count
+       FROM campaign_categories c ${where} ORDER BY c.created_at ASC`
+    );
+    return categories;
+  }
+
+  createCampaignCategory(payload: { name: string; description?: string; color?: string; isActive?: boolean }) {
+    if (!payload.name || !payload.name.trim()) {
+      throw new Error("Category name is required");
+    }
+    const trimmedName = payload.name.trim();
+    const slug = trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    
+    // Check if duplicate exists
+    const existing = this.db.query("SELECT id FROM campaign_categories WHERE LOWER(name) = LOWER(?) OR slug = ?", [trimmedName, slug]);
+    if (existing && existing.length > 0) {
+      throw new Error(`Category "${trimmedName}" already exists`);
+    }
+
+    const id = `cat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const now = new Date().toISOString();
+    const color = payload.color || "#0076D7";
+    const isActive = payload.isActive === false ? 0 : 1;
+
+    this.db.execute(
+      `INSERT INTO campaign_categories (id, name, slug, description, color, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, trimmedName, slug, payload.description || "", color, isActive, now, now]
+    );
+
+    return this.db.query("SELECT * FROM campaign_categories WHERE id = ?", [id])[0];
+  }
+
+  updateCampaignCategory(id: string, payload: { name?: string; description?: string; color?: string; isActive?: boolean }) {
+    const existing = this.db.query("SELECT * FROM campaign_categories WHERE id = ?", [id])[0];
+    if (!existing) {
+      throw new Error(`Category with ID ${id} not found`);
+    }
+
+    const oldName = existing.name;
+    const newName = payload.name !== undefined ? payload.name.trim() : oldName;
+
+    if (!newName) {
+      throw new Error("Category name cannot be empty");
+    }
+
+    // If changing name, ensure uniqueness
+    if (newName.toLowerCase() !== oldName.toLowerCase()) {
+      const duplicate = this.db.query("SELECT id FROM campaign_categories WHERE LOWER(name) = LOWER(?) AND id != ?", [newName, id]);
+      if (duplicate && duplicate.length > 0) {
+        throw new Error(`Another category named "${newName}" already exists`);
+      }
+    }
+
+    const newSlug = newName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const newDesc = payload.description !== undefined ? payload.description : existing.description;
+    const newColor = payload.color !== undefined ? payload.color : existing.color;
+    const newActive = payload.isActive !== undefined ? (payload.isActive ? 1 : 0) : existing.is_active;
+    const now = new Date().toISOString();
+
+    // 1. Update the category itself
+    this.db.execute(
+      `UPDATE campaign_categories SET name = ?, slug = ?, description = ?, color = ?, is_active = ?, updated_at = ? WHERE id = ?`,
+      [newName, newSlug, newDesc, newColor, newActive, now, id]
+    );
+
+    // 2. CASCADING AUTO-UPDATE: If name changed, automatically update all existing ad campaigns with this category
+    let affectedCampaignsCount = 0;
+    if (newName !== oldName) {
+      const updateResult = this.db.execute(
+        `UPDATE ad_campaigns SET category = ?, updated_at = ? WHERE category = ?`,
+        [newName, now, oldName]
+      );
+      affectedCampaignsCount = updateResult.changes || 0;
+    }
+
+    const updatedCategory = this.db.query("SELECT * FROM campaign_categories WHERE id = ?", [id])[0];
+    return {
+      category: updatedCategory,
+      affectedCampaignsCount,
+      previousName: oldName,
+      newName: newName,
+    };
+  }
+
+  deleteCampaignCategory(id: string, fallbackCategoryName: string = "General") {
+    const existing = this.db.query("SELECT * FROM campaign_categories WHERE id = ?", [id])[0];
+    if (!existing) {
+      throw new Error(`Category with ID ${id} not found`);
+    }
+
+    const categoryName = existing.name;
+    const now = new Date().toISOString();
+
+    // Reassign any existing campaigns in this category to fallbackCategoryName to preserve integrity
+    const reassignResult = this.db.execute(
+      `UPDATE ad_campaigns SET category = ?, updated_at = ? WHERE category = ?`,
+      [fallbackCategoryName, now, categoryName]
+    );
+
+    // Delete category
+    this.db.execute("DELETE FROM campaign_categories WHERE id = ?", [id]);
+
+    return {
+      success: true,
+      deletedCategory: categoryName,
+      reassignedCampaignsCount: reassignResult.changes || 0,
+      fallbackCategoryName,
+    };
+  }
+
+
+  // ================= 1.6. GLOBAL PUSH NOTIFICATION SETTINGS ================= //
+  getGlobalPushSettings() {
+    let settings = this.db.query("SELECT * FROM push_global_settings WHERE id = 'global_push_config'")[0];
+    if (!settings) {
+      const now = new Date().toISOString();
+      this.db.execute(
+        `INSERT OR IGNORE INTO push_global_settings (
+          id, app_name, app_logo_url, small_icon_name, accent_color, sound_mode, vibration_enabled,
+          quiet_hours_enabled, quiet_hours_start, quiet_hours_end, promotional_frequency_cap,
+          campaign_ttl_hours, normal_push_ttl_hours, default_deep_link, kill_switch_promotional, provider_mode, updated_at
+        ) VALUES (
+          'global_push_config', 'HELLO — Hyperlocal Discovery', 'https://hello-hi.in/logo.png', 'ic_stat_hello', '#0076D7',
+          'DEFAULT', 1, 1, '22:00', '07:00', 2, 24, 4, 'hello://home', 0, 'SIMULATION', ?
+        )`,
+        [now]
+      );
+      settings = this.db.query("SELECT * FROM push_global_settings WHERE id = 'global_push_config'")[0];
+    }
+    return settings;
+  }
+
+  updateGlobalPushSettings(payload: any) {
+    this.getGlobalPushSettings(); // ensure row exists
+    const now = new Date().toISOString();
+
+    this.db.execute(
+      `UPDATE push_global_settings SET
+        app_name = COALESCE(?, app_name),
+        app_logo_url = COALESCE(?, app_logo_url),
+        small_icon_name = COALESCE(?, small_icon_name),
+        accent_color = COALESCE(?, accent_color),
+        default_banner_url = COALESCE(?, default_banner_url),
+        sound_mode = COALESCE(?, sound_mode),
+        vibration_enabled = COALESCE(?, vibration_enabled),
+        quiet_hours_enabled = COALESCE(?, quiet_hours_enabled),
+        quiet_hours_start = COALESCE(?, quiet_hours_start),
+        quiet_hours_end = COALESCE(?, quiet_hours_end),
+        promotional_frequency_cap = COALESCE(?, promotional_frequency_cap),
+        campaign_ttl_hours = COALESCE(?, campaign_ttl_hours),
+        normal_push_ttl_hours = COALESCE(?, normal_push_ttl_hours),
+        default_deep_link = COALESCE(?, default_deep_link),
+        kill_switch_promotional = COALESCE(?, kill_switch_promotional),
+        provider_mode = COALESCE(?, provider_mode),
+        updated_at = ?
+      WHERE id = 'global_push_config'`,
+      [
+        payload.appName ?? null,
+        payload.appLogoUrl ?? null,
+        payload.smallIconName ?? null,
+        payload.accentColor ?? null,
+        payload.defaultBannerUrl ?? null,
+        payload.soundMode ?? null,
+        payload.vibrationEnabled !== undefined ? (payload.vibrationEnabled ? 1 : 0) : null,
+        payload.quietHoursEnabled !== undefined ? (payload.quietHoursEnabled ? 1 : 0) : null,
+        payload.quietHoursStart ?? null,
+        payload.quietHoursEnd ?? null,
+        payload.promotionalFrequencyCap !== undefined ? Number(payload.promotionalFrequencyCap) : null,
+        payload.campaignTtlHours !== undefined ? Number(payload.campaignTtlHours) : null,
+        payload.normalPushTtlHours !== undefined ? Number(payload.normalPushTtlHours) : null,
+        payload.defaultDeepLink ?? null,
+        payload.killSwitchPromotional !== undefined ? (payload.killSwitchPromotional ? 1 : 0) : null,
+        payload.providerMode ?? null,
+        now
+      ]
+    );
+
+    return this.getGlobalPushSettings();
+  }
+
+  sendTestPushNotification(payload: { phone?: string; title?: string; message?: string; targetRole?: string }) {
+    const settings = this.getGlobalPushSettings();
+    const testRef = `TEST-PUSH-${Date.now()}`;
+    const now = new Date().toISOString();
+    const recipientPhone = payload.phone || '+91 98480 22338';
+    const title = payload.title || `[TEST] Welcome to ${settings.app_name}`;
+    const message = payload.message || 'This is a test notification verifying your global brand icon, color, and sound.';
+
+    this.db.execute(
+      `INSERT INTO normal_push_logs (
+        id, notification_ref, event_type, recipient_type, recipient_id, recipient_phone,
+        title, message, destination_url, delivery_status, created_at, sent_at
+      ) VALUES (?, ?, 'TEST_PUSH_VERIFICATION', ?, 'admin-test-user', ?, ?, ?, ?, 'DELIVERED', ?, ?)`,
+      [
+        `test_${Date.now()}`,
+        testRef,
+        payload.targetRole || 'CUSTOMER',
+        recipientPhone,
+        title,
+        message,
+        settings.default_deep_link || 'hello://home',
+        now,
+        now
+      ]
+    );
+
+    return {
+      success: true,
+      reference: testRef,
+      recipient: recipientPhone,
+      status: 'DELIVERED',
+      appliedBranding: {
+        appName: settings.app_name,
+        accentColor: settings.accent_color,
+        sound: settings.sound_mode,
+        logo: settings.app_logo_url
+      },
+      sentAt: now
+    };
+  }
+
   // ================= 2. CAMPAIGN PUSH NOTIFICATIONS ================= //
   getCampaigns(query: {
     page?: number;
