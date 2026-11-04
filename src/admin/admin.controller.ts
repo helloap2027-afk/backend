@@ -1,15 +1,7 @@
-<<<<<<< HEAD
-import { Controller, Get, Post, Put, Param, Body, Query, Req, UseGuards } from "@nestjs/common";
-import { AdminService } from "./admin.service";
-import { AuthService } from "../auth/auth.service";
-import { AuthGuard } from "../auth/guards/auth.guard";
-import { CurrentUser } from "../auth/decorators/roles.decorator";
-=======
 import { Controller, Get, Post, Put, Patch, Param, Body, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import * as fs from "node:fs";
 import { AdminService } from "./admin.service";
 import { AuthService } from "../auth/auth.service";
->>>>>>> feature/superadmin
 
 @Controller("admin")
 export class AdminController {
@@ -18,12 +10,6 @@ export class AdminController {
     private readonly authService: AuthService
   ) {}
 
-<<<<<<< HEAD
-  @Post("auth/login")
-  async adminLogin(@Body() body: any, @Req() req: any) {
-    const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "127.0.0.1";
-    const data = await this.authService.adminLogin(body.email, body.password, body.deviceInfo, ip);
-=======
   private extractAdminActor(req: any): string {
     const authHeader = req.headers["authorization"];
     if (authHeader && authHeader.startsWith("Bearer ")) {
@@ -54,7 +40,6 @@ export class AdminController {
       body.deviceInfo || "Admin Console",
       ip
     );
->>>>>>> feature/superadmin
     return {
       success: true,
       data
@@ -63,10 +48,6 @@ export class AdminController {
 
   @Post("auth/mfa/verify")
   async verifyAdminMfa(@Body() body: any, @Req() req: any) {
-<<<<<<< HEAD
-    const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "127.0.0.1";
-    const data = await this.authService.verifyAdminMfa(body.mfaChallengeId, body.code, body.deviceInfo, ip);
-=======
     const ip = req.ip || req.connection?.remoteAddress || "127.0.0.1";
     const data = await this.authService.verifyAdminMfa(
       body.mfaChallengeId,
@@ -74,30 +55,12 @@ export class AdminController {
       body.deviceInfo || "Admin Console",
       ip
     );
->>>>>>> feature/superadmin
     return {
       success: true,
       data
     };
   }
 
-<<<<<<< HEAD
-  @Post("auth/logout")
-  @UseGuards(AuthGuard)
-  async adminAuthLogout(@CurrentUser("sub") userId: string, @Body() body: any) {
-    return this.authService.logout(userId, body.refreshToken);
-  }
-
-  @Get("auth/me")
-  @UseGuards(AuthGuard)
-  async getAdminMe(@CurrentUser("sub") userId: string) {
-    const data = this.authService.getUserProfile(userId);
-    return {
-      success: true,
-      data
-    };
-  }
-=======
   // =========================================================================
   // CUSTOMERS MANAGEMENT ENDPOINTS
   // =========================================================================
@@ -190,7 +153,6 @@ export class AdminController {
   bulkDeleteMerchants(@Body() body: { ids: string[] }) {
     return this.adminService.bulkDeleteMerchants(body.ids);
   }
->>>>>>> feature/superadmin
 
   @Get("dashboard/stats")
   getDashboardStats() {
@@ -226,6 +188,12 @@ export class AdminController {
   rejectBusiness(@Param("id") id: string, @Body("reason") reason: string, @Req() req: any) {
     const actorId = this.extractAdminActor(req);
     return this.adminService.rejectBusiness(id, reason || "Documents failed validation", actorId);
+  }
+
+  @Post("businesses/:id/kyc-reminder")
+  sendKycReminder(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.sendKycReminder(id, actorId);
   }
 
   @Post("businesses/:id/suspend")
