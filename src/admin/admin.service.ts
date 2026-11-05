@@ -2089,5 +2089,357 @@ export class AdminService {
       message: `${ids.length} merchant(s) deleted successfully.`,
     };
   }
-}
 
+  // =========================================================================
+  // ENTERPRISE ROLES & PERMISSIONS MANAGEMENT (STAGE 1)
+  // =========================================================================
+
+  getPermissionCatalog() {
+    const permissions = this.db.query<any>(
+      "SELECT id, permission_key, name, description, category FROM permission_definitions WHERE is_active = 1 ORDER BY category, name"
+    );
+    const categories = Array.from(new Set(permissions.map((p) => p.category)));
+    return {
+      total: permissions.length,
+      categories,
+      permissions,
+    };
+  }
+
+  getRoles() {
+    const roles = this.db.query<any>(
+      `SELECT r.id, r.name, r.description, r.role_type, r.is_system,
+              COUNT(DISTINCT up.user_id) as assigned_users_count,
+              COUNT(DISTINCT rp.permission_id) as permissions_count
+       FROM roles r
+       LEFT JOIN user_permissions up ON up.role_id = r.id
+       LEFT JOIN role_permissions rp ON rp.role_id = r.id
+       GROUP BY r.id
+       ORDER BY r.is_system DESC, r.name ASC`
+    );
+    return roles;
+  }
+
+  getRoleDetails(roleId: string) {
+    const role = this.db.queryOne<any>("SELECT * FROM roles WHERE id = ?", [roleId]);
+    if (!role) {
+      throw new NotFoundException(`Role '${roleId}' not found.`);
+    }
+
+    const permissions = this.db.query<any>(
+      `SELECT pd.id, pd.permission_key, pd.name, pd.description, pd.category
+       FROM role_permissions rp
+       JOIN permission_definitions pd ON pd.id = rp.permission_id
+       WHERE rp.role_id = ? AND pd.is_active = 1
+       ORDER BY pd.category, pd.name`,
+      [roleId]
+    );
+
+    const users = this.db.query<any>(
+      `SELECT u.id, u.full_name, u.email, u.phone_number, u.status
+       FROM user_permissions up
+       JOIN users u ON u.id = up.user_id
+       WHERE up.role_id = ?`,
+      [roleId]
+    );
+
+    return {
+      role,
+      permissions,
+      assignedUsers: users,
+    };
+  }
+
+  createRole(payload: { name: string; description?: string; permissionKeys?: string[] }, actorId: string = "super-admin") {
+    if (!payload.name || !payload.name.trim()) {
+      throw new BadRequestException("Role name is required.");
+    }
+
+    const cleanName = payload.name.trim().toUpperCase().replace(/\s+/g, "_");
+    const existing = this.db.queryOne<any>("SELECT id FROM roles WHERE name = ?", [cleanName]);
+    if (existing) {
+      throw new BadRequestException(`Role with name '${cleanName}' already exists.`);
+    }
+
+    const roleId = `role-${cleanName.toLowerCase().replace(/_/g, "-")}`;
+    const now = new Date().toISOString();
+
+    this.db.execute(
+      `INSERT INTO roles (id, name, description, role_type, is_system)
+       VALUES (?, ?, ?, 'ADMINISTRATIVE', 0)`,
+      [roleId, cleanName, payload.description?.trim() || null]
+    );
+
+    if (Array.isArray(payload.permissionKeys) && payload.permissionKeys.length > 0) {
+      const perms = this.db.query<any>(
+        `SELECT id, permission_key FROM permission_definitions WHERE permission_key IN (${payload.permissionKeys.map(() => "?").join(",")})`,
+        payload.permissionKeys
+      );
+
+      for (const p of perms) {
+        this.db.execute(
+          `INSERT OR IGNORE INTO role_permissions (id, role_id, permission_id, created_at)
+           VALUES (?, ?, ?, ?)`,
+          [`rp_${roleId}_${p.id}`, roleId, p.id, now]
+        );
+      }
+    }
+
+    this.logAdminAction(actorId, "ROLE_CREATED", "roles", roleId, null, { name: cleanName, permissions: payload.permissionKeys });
+
+    return {
+      success: true,
+      message: `Administrative role '${cleanName}' created successfully.`,
+      roleId,
+    };
+  }
+
+  updateRole(roleId: string, payload: { name?: string; description?: string; permissionKeys?: string[] }, actorId: string = "super-admin") {
+    const role = this.db.queryOne<any>("SELECT * FROM roles WHERE id = ?", [roleId]);
+    if (!role) {
+      throw new NotFoundException(`Role '${roleId}' not found.`);
+    }
+
+    if (role.id === "role-superadmin") {
+      throw new BadRequestException("The root SUPER_ADMIN role cannot be modified or reconfigured.");
+    }
+
+    const now = new Date().toISOString();
+
+    if (payload.name && payload.name.trim()) {
+      const cleanName = payload.name.trim().toUpperCase().replace(/\s+/g, "_");
+      this.db.execute("UPDATE roles SET name = ?, description = ? WHERE id = ?", [cleanName, payload.description || role.description, roleId]);
+    } else if (payload.description !== undefined) {
+      this.db.execute("UPDATE roles SET description = ? WHERE id = ?", [payload.description, roleId]);
+    }
+
+    if (Array.isArray(payload.permissionKeys)) {
+      this.db.execute("DELETE FROM role_permissions WHERE role_id = ?", [roleId]);
+
+      if (payload.permissionKeys.length > 0) {
+        const perms = this.db.query<any>(
+          `SELECT id, permission_key FROM permission_definitions WHERE permission_key IN (${payload.permissionKeys.map(() => "?").join(",")})`,
+          payload.permissionKeys
+        );
+
+        for (const p of perms) {
+          this.db.execute(
+            `INSERT OR IGNORE INTO role_permissions (id, role_id, permission_id, created_at)
+             VALUES (?, ?, ?, ?)`,
+            [`rp_${roleId}_${p.id}`, roleId, p.id, now]
+          );
+        }
+      }
+    }
+
+    this.logAdminAction(actorId, "ROLE_UPDATED", "roles", roleId, role, payload);
+
+    return {
+      success: true,
+      message: `Role '${role.name}' updated successfully.`,
+    };
+  }
+
+  deleteRole(roleId: string, actorId: string = "super-admin") {
+    const role = this.db.queryOne<any>("SELECT * FROM roles WHERE id = ?", [roleId]);
+    if (!role) {
+      throw new NotFoundException(`Role '${roleId}' not found.`);
+    }
+
+    if (role.is_system || role.id === "role-superadmin" || role.id === "role-owner" || role.id === "role-staff" || role.id === "role-cust") {
+      throw new BadRequestException(`Cannot delete protected system role '${role.name}'.`);
+    }
+
+    const assigned = this.db.queryOne<{ count: number }>(
+      "SELECT COUNT(*) as count FROM user_permissions WHERE role_id = ?",
+      [roleId]
+    );
+
+    if (assigned && assigned.count > 0) {
+      throw new BadRequestException(
+        `Cannot delete role '${role.name}' because it is assigned to ${assigned.count} active administrator(s). Reassign them first.`
+      );
+    }
+
+    this.db.execute("DELETE FROM role_permissions WHERE role_id = ?", [roleId]);
+    this.db.execute("DELETE FROM roles WHERE id = ?", [roleId]);
+
+    this.logAdminAction(actorId, "ROLE_DELETED", "roles", roleId, role, null);
+
+    return {
+      success: true,
+      message: `Role '${role.name}' deleted successfully.`,
+    };
+  }
+
+  getAdministrators(query: { page?: number; pageSize?: number; search?: string; status?: string }) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+    const offset = (page - 1) * pageSize;
+
+    const whereClauses: string[] = ["r.role_type = 'ADMINISTRATIVE'"];
+    const params: any[] = [];
+
+    if (query.search && query.search.trim()) {
+      const q = `%${query.search.trim()}%`;
+      whereClauses.push("(u.full_name LIKE ? OR u.email LIKE ? OR u.phone_number LIKE ?)");
+      params.push(q, q, q);
+    }
+
+    if (query.status && query.status !== "ALL") {
+      whereClauses.push("u.status = ?");
+      params.push(query.status);
+    }
+
+    const whereSql = `WHERE ${whereClauses.join(" AND ")}`;
+
+    const totalRow = this.db.queryOne<{ total: number }>(
+      `SELECT COUNT(DISTINCT u.id) as total
+       FROM users u
+       JOIN user_permissions up ON up.user_id = u.id
+       JOIN roles r ON r.id = up.role_id
+       ${whereSql}`,
+      params
+    );
+
+    const admins = this.db.query<any>(
+      `SELECT u.id, u.full_name, u.email, u.phone_number, u.status, u.avatar_url, u.created_at,
+              r.id as role_id, r.name as role_name, r.is_system as is_system_role
+       FROM users u
+       JOIN user_permissions up ON up.user_id = u.id
+       JOIN roles r ON r.id = up.role_id
+       ${whereSql}
+       ORDER BY u.created_at ASC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+
+    const total = totalRow?.total || 0;
+
+    return {
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize) || 1,
+      administrators: admins,
+    };
+  }
+
+  assignAdminRole(userId: string, roleId: string, actorId: string = "super-admin") {
+    const user = this.db.queryOne<any>("SELECT * FROM users WHERE id = ?", [userId]);
+    if (!user) {
+      throw new NotFoundException(`User '${userId}' not found.`);
+    }
+
+    const role = this.db.queryOne<any>("SELECT * FROM roles WHERE id = ?", [roleId]);
+    if (!role) {
+      throw new NotFoundException(`Role '${roleId}' not found.`);
+    }
+
+    if (role.role_type !== "ADMINISTRATIVE") {
+      throw new BadRequestException("Cannot assign non-administrative role to administrator profile.");
+    }
+
+    // Protect final Super Admin from demotion
+    if (user.id === "usr_super_admin" && role.id !== "role-superadmin") {
+      throw new BadRequestException("Safety rule violation: The root Super Administrator account cannot be demoted.");
+    }
+
+    const existingPerm = this.db.queryOne<any>("SELECT * FROM user_permissions WHERE user_id = ?", [userId]);
+
+    if (existingPerm) {
+      this.db.execute("UPDATE user_permissions SET role_id = ? WHERE user_id = ?", [roleId, userId]);
+    } else {
+      this.db.execute(
+        "INSERT INTO user_permissions (id, user_id, role_id) VALUES (?, ?, ?)",
+        [`perm-${Date.now()}`, userId, roleId]
+      );
+    }
+
+    this.logAdminAction(actorId, "ROLE_ASSIGNED", "users", userId, existingPerm, { roleId, roleName: role.name });
+
+    return {
+      success: true,
+      message: `Role '${role.name}' assigned to administrator '${user.full_name}'.`,
+    };
+  }
+
+  updateAdminStatus(userId: string, status: "ACTIVE" | "SUSPENDED", actorId: string = "super-admin") {
+    const user = this.db.queryOne<any>("SELECT * FROM users WHERE id = ?", [userId]);
+    if (!user) {
+      throw new NotFoundException(`User '${userId}' not found.`);
+    }
+
+    // Safety rule: Cannot suspend final active super admin
+    if (user.id === "usr_super_admin" && status === "SUSPENDED") {
+      throw new BadRequestException("Safety rule violation: The root Super Administrator cannot be deactivated or suspended.");
+    }
+
+    this.db.execute("UPDATE users SET status = ?, updated_at = ? WHERE id = ?", [status, new Date().toISOString(), userId]);
+
+    // If suspended, revoke active sessions
+    if (status === "SUSPENDED") {
+      this.db.execute("UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL", [
+        new Date().toISOString(),
+        userId,
+      ]);
+    }
+
+    this.logAdminAction(actorId, "ADMIN_STATUS_CHANGED", "users", userId, { status: user.status }, { status });
+
+    return {
+      success: true,
+      message: `Administrator '${user.full_name}' status updated to ${status}.`,
+    };
+  }
+
+  getAdminAuditLogs(query: { page?: number; pageSize?: number; search?: string }) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+    const offset = (page - 1) * pageSize;
+
+    const whereClauses: string[] = [];
+    const params: any[] = [];
+
+    if (query.search && query.search.trim()) {
+      const q = `%${query.search.trim()}%`;
+      whereClauses.push("(action LIKE ? OR entity_name LIKE ? OR actor_user_id LIKE ?)");
+      params.push(q, q, q);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+    const totalRow = this.db.queryOne<{ total: number }>(`SELECT COUNT(*) as total FROM audit_logs ${whereSql}`, params);
+    const logs = this.db.query<any>(
+      `SELECT * FROM audit_logs ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+
+    return {
+      total: totalRow?.total || 0,
+      page,
+      pageSize,
+      logs,
+    };
+  }
+
+  private logAdminAction(actorId: string, action: string, entityName: string, entityId: string, before: any, after: any) {
+    try {
+      this.db.execute(
+        `INSERT INTO audit_logs (id, actor_user_id, action, entity_name, entity_id, payload_before, payload_after, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          `audit-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          actorId,
+          action,
+          entityName,
+          entityId,
+          before ? JSON.stringify(before) : null,
+          after ? JSON.stringify(after) : null,
+          new Date().toISOString(),
+        ]
+      );
+    } catch {}
+  }
+
+}
