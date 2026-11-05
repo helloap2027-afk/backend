@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Patch, Param, Body, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
+import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import * as fs from "node:fs";
 import { AdminService } from "./admin.service";
 import { AuthService } from "../auth/auth.service";
@@ -190,6 +190,12 @@ export class AdminController {
     return this.adminService.rejectBusiness(id, reason || "Documents failed validation", actorId);
   }
 
+  @Post("businesses/:id/kyc-reminder")
+  sendKycReminder(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.sendKycReminder(id, actorId);
+  }
+
   @Post("businesses/:id/suspend")
   suspendBusiness(@Param("id") id: string, @Body("reason") reason: string, @Req() req: any) {
     const actorId = this.extractAdminActor(req);
@@ -338,12 +344,102 @@ export class AdminController {
     };
   }
 
+  @Post("subscriptions/plans")
+  createSubscriptionPlan(@Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.createSubscriptionPlan(body, actorId);
+  }
+
+  @Put("subscriptions/plans/:id")
+  updateSubscriptionPlan(@Param("id") id: string, @Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.updateSubscriptionPlan(id, body, actorId);
+  }
+
+  @Delete("subscriptions/plans/:id")
+  deleteSubscriptionPlan(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.deleteSubscriptionPlan(id, actorId);
+  }
+
+  // =========================================================================
+  // ENTERPRISE STAGE 1: BENEFITS LIBRARY & CAPABILITIES API
+  // =========================================================================
+
+  @Get("subscriptions/capabilities")
+  getBackendCapabilities() {
+    return {
+      success: true,
+      data: this.adminService.getBackendCapabilities(),
+    };
+  }
+
+  @Get("subscriptions/benefits")
+  getBenefitDefinitions(@Query() query: any) {
+    return {
+      success: true,
+      data: this.adminService.getBenefitDefinitions(query),
+    };
+  }
+
+  @Get("subscriptions/benefits/:id")
+  getBenefitById(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getBenefitById(id),
+    };
+  }
+
+  @Post("subscriptions/benefits")
+  createBenefitDefinition(@Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.createBenefitDefinition(body, actorId);
+  }
+
+  @Put("subscriptions/benefits/:id")
+  updateBenefitDefinition(@Param("id") id: string, @Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.updateBenefitDefinition(id, body, actorId);
+  }
+
+  @Get("subscriptions/plans/:id/details")
+  getPlanDetailsWithBenefits(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getPlanDetailsWithBenefits(id),
+    };
+  }
+
+  @Post("subscriptions/plans/:id/benefits")
+  assignBenefitsToPlan(@Param("id") id: string, @Body("benefits") benefits: any[], @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.assignBenefitsToPlan(id, benefits, actorId);
+  }
+
+  @Post("subscriptions/plans/:id/publish")
+  publishPlanVersion(@Param("id") id: string, @Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.publishPlanVersion(id, body, actorId);
+  }
+
   @Get("subscriptions/:id")
   getSubscriptionById(@Param("id") id: string) {
     return {
       success: true,
       data: this.adminService.getSubscriptionById(id),
     };
+  }
+
+  @Delete("subscriptions/:id")
+  deleteSubscription(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.deleteSubscription(id, actorId);
+  }
+
+  @Post("subscriptions/bulk-delete")
+  bulkDeleteSubscriptions(@Body("ids") ids: string[], @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.bulkDeleteSubscriptions(ids, actorId);
   }
 
   // =========================================================================
@@ -380,6 +476,90 @@ export class AdminController {
   markNotificationAsRead(@Param("id") id: string) {
     return this.adminService.markNotificationAsRead(id);
   }
+
+  // =========================================================================
+  // ROLES & PERMISSIONS MANAGEMENT ENDPOINTS (STAGE 1)
+  // =========================================================================
+
+  @Get("rbac/permissions")
+  getPermissionCatalog() {
+    return {
+      success: true,
+      data: this.adminService.getPermissionCatalog(),
+    };
+  }
+
+  @Get("rbac/roles")
+  getRoles() {
+    return {
+      success: true,
+      data: this.adminService.getRoles(),
+    };
+  }
+
+  @Get("rbac/roles/:id")
+  getRoleDetails(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getRoleDetails(id),
+    };
+  }
+
+  @Post("rbac/roles")
+  createRole(@Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.createRole(body, actorId);
+  }
+
+  @Put("rbac/roles/:id")
+  updateRole(@Param("id") id: string, @Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.updateRole(id, body, actorId);
+  }
+
+  @Delete("rbac/roles/:id")
+  deleteRole(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.deleteRole(id, actorId);
+  }
+
+  @Get("rbac/administrators")
+  getAdministrators(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("status") status?: string
+  ) {
+    const res = this.adminService.getAdministrators({ page, pageSize, search, status });
+    return {
+      success: true,
+      data: res,
+    };
+  }
+
+  @Put("rbac/administrators/:id/role")
+  assignAdminRole(@Param("id") id: string, @Body("roleId") roleId: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.assignAdminRole(id, roleId, actorId);
+  }
+
+  @Put("rbac/administrators/:id/status")
+  updateAdminStatus(@Param("id") id: string, @Body("status") status: "ACTIVE" | "SUSPENDED", @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.updateAdminStatus(id, status, actorId);
+  }
+
+  @Get("rbac/audit-logs")
+  getAdminAuditLogs(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string
+  ) {
+    const res = this.adminService.getAdminAuditLogs({ page, pageSize, search });
+    return {
+      success: true,
+      data: res,
+    };
+  }
+
 }
-
-
