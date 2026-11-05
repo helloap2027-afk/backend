@@ -476,6 +476,90 @@ export class AdminController {
   markNotificationAsRead(@Param("id") id: string) {
     return this.adminService.markNotificationAsRead(id);
   }
+
+  // =========================================================================
+  // ROLES & PERMISSIONS MANAGEMENT ENDPOINTS (STAGE 1)
+  // =========================================================================
+
+  @Get("rbac/permissions")
+  getPermissionCatalog() {
+    return {
+      success: true,
+      data: this.adminService.getPermissionCatalog(),
+    };
+  }
+
+  @Get("rbac/roles")
+  getRoles() {
+    return {
+      success: true,
+      data: this.adminService.getRoles(),
+    };
+  }
+
+  @Get("rbac/roles/:id")
+  getRoleDetails(@Param("id") id: string) {
+    return {
+      success: true,
+      data: this.adminService.getRoleDetails(id),
+    };
+  }
+
+  @Post("rbac/roles")
+  createRole(@Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.createRole(body, actorId);
+  }
+
+  @Put("rbac/roles/:id")
+  updateRole(@Param("id") id: string, @Body() body: any, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.updateRole(id, body, actorId);
+  }
+
+  @Delete("rbac/roles/:id")
+  deleteRole(@Param("id") id: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.deleteRole(id, actorId);
+  }
+
+  @Get("rbac/administrators")
+  getAdministrators(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("status") status?: string
+  ) {
+    const res = this.adminService.getAdministrators({ page, pageSize, search, status });
+    return {
+      success: true,
+      data: res,
+    };
+  }
+
+  @Put("rbac/administrators/:id/role")
+  assignAdminRole(@Param("id") id: string, @Body("roleId") roleId: string, @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.assignAdminRole(id, roleId, actorId);
+  }
+
+  @Put("rbac/administrators/:id/status")
+  updateAdminStatus(@Param("id") id: string, @Body("status") status: "ACTIVE" | "SUSPENDED", @Req() req: any) {
+    const actorId = this.extractAdminActor(req);
+    return this.adminService.updateAdminStatus(id, status, actorId);
+  }
+
+  @Get("rbac/audit-logs")
+  getAdminAuditLogs(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string
+  ) {
+    const res = this.adminService.getAdminAuditLogs({ page, pageSize, search });
+    return {
+      success: true,
+      data: res,
+    };
+  }
+
 }
-
-
