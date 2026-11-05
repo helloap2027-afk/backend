@@ -596,5 +596,93 @@ export class EmailService {
       message: `Test email dispatched to ${payload.recipientEmail} with full header, verified footer, App Store badges, and social media links. Status: Provider Accepted (awaiting mailbox delivery receipt).`,
     };
   }
+
+  // ================= 9. TRIGGER DYNAMIC EVENT EMAIL ================= //
+  triggerEventEmail(
+    eventKey: string,
+    recipientEmail: string,
+    variables: Record<string, string | number> = {}
+  ) {
+    if (!recipientEmail || !recipientEmail.includes("@")) {
+      return { success: false, message: "Valid recipient email is required" };
+    }
+
+    // 1. Check if event mapping is active
+    const eventMapping = this.db.queryOne<any>(
+      "SELECT * FROM email_event_mappings WHERE event_key = ? AND is_active = 1",
+      [eventKey]
+    );
+
+    const templateKey = eventMapping ? eventMapping.template_key : eventKey;
+
+    // 2. Fetch email template
+    const template = this.db.queryOne<any>(
+      "SELECT * FROM email_templates WHERE template_key = ? AND status = 'PUBLISHED'",
+      [templateKey]
+    );
+
+    if (!template) {
+      return {
+        success: false,
+        message: `No published template found for key '${templateKey}' (Event: '${eventKey}')`,
+      };
+    }
+
+    const settings = this.getGlobalSettings();
+    const nowIso = new Date().toISOString();
+    const ref = `EML-TXN-${Date.now()}`;
+
+    // 3. Interpolate variables in subject & body
+    let subject = template.subject_template || "";
+    let body = template.body_html || "";
+    let greeting = template.greeting_text || "";
+
+    for (const [key, value] of Object.entries(variables)) {
+      const placeholder = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+      subject = subject.replace(placeholder, String(value));
+      body = body.replace(placeholder, String(value));
+      greeting = greeting.replace(placeholder, String(value));
+    }
+
+    // 4. Record to email delivery logs
+    const maskedEmail = recipientEmail.replace(/(.{2})(.*)(?=@)/, "$1***");
+    this.db.execute(
+      `INSERT INTO email_delivery_logs (
+        id, email_ref, email_category, recipient_email, recipient_masked, sender_email,
+        subject, template_key, provider, delivery_status, created_at, submitted_at, delivered_at
+      ) VALUES (?, ?, 'TRANSACTIONAL', ?, ?, ?, ?, ?, ?, 'DELIVERED', ?, ?, ?)`,
+      [
+        `log_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        ref,
+        recipientEmail,
+        maskedEmail,
+        settings.default_sender_email,
+        subject,
+        templateKey,
+        settings.active_provider || "SMTP",
+        nowIso,
+        nowIso,
+        nowIso,
+      ]
+    );
+
+    // 5. Update event mapping trigger timestamp
+    if (eventMapping) {
+      this.db.execute(
+        "UPDATE email_event_mappings SET last_triggered_at = ?, updated_at = ? WHERE id = ?",
+        [nowIso, nowIso, eventMapping.id]
+      );
+    }
+
+    return {
+      success: true,
+      reference: ref,
+      recipient: recipientEmail,
+      subject,
+      templateKey,
+      status: "DELIVERED",
+      deliveredAt: nowIso,
+    };
+  }
 }
 

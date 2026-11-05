@@ -563,6 +563,80 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         FOREIGN KEY (plan_id) REFERENCES subscription_plans(id)
       );
       CREATE INDEX IF NOT EXISTS idx_sub_status ON subscriptions(status);
+
+      -- =========================================================================
+      -- ENTERPRISE PLANS & BENEFITS MANAGEMENT SCHEMA (STAGE 1)
+      -- =========================================================================
+      CREATE TABLE IF NOT EXISTS benefit_definitions (
+        id TEXT PRIMARY KEY,
+        benefit_key TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        category TEXT NOT NULL DEFAULT 'GENERAL',
+        data_type TEXT NOT NULL, -- 'BOOLEAN', 'INTEGER', 'QUOTA', 'DURATION', 'PERCENTAGE', 'ENUM', 'FEATURE_ACCESS'
+        unit TEXT,
+        default_value TEXT,
+        min_value REAL,
+        max_value REAL,
+        allowed_values TEXT, -- JSON array of allowed strings for ENUM
+        reset_period TEXT, -- 'MONTHLY', 'YEARLY', 'NONE'
+        supported_audiences TEXT NOT NULL DEFAULT '["BUSINESS"]', -- JSON array
+        capability_binding TEXT, -- E.g. 'business.max_listings', 'enquiry.monthly_quota'
+        enforcement_status TEXT NOT NULL DEFAULT 'UNVERIFIED', -- 'ENFORCED', 'UNVERIFIED', 'DISPLAY_ONLY'
+        is_active INTEGER NOT NULL DEFAULT 1,
+        display_order INTEGER NOT NULL DEFAULT 0,
+        icon TEXT DEFAULT 'CheckCircle',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_benefit_key ON benefit_definitions(benefit_key);
+
+      CREATE TABLE IF NOT EXISTS plan_benefit_assignments (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        benefit_id TEXT NOT NULL,
+        assigned_value TEXT NOT NULL,
+        display_order INTEGER NOT NULL DEFAULT 0,
+        is_visible INTEGER NOT NULL DEFAULT 1,
+        is_highlighted INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (plan_id) REFERENCES subscription_plans(id) ON DELETE CASCADE,
+        FOREIGN KEY (benefit_id) REFERENCES benefit_definitions(id) ON DELETE CASCADE,
+        UNIQUE(plan_id, benefit_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS plan_versions (
+        id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        version_number INTEGER NOT NULL DEFAULT 1,
+        name TEXT NOT NULL,
+        plan_code TEXT NOT NULL,
+        price REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'INR',
+        billing_interval TEXT NOT NULL DEFAULT 'MONTHLY',
+        features_snapshot TEXT NOT NULL, -- JSON array
+        benefits_snapshot TEXT NOT NULL, -- JSON array of benefit values and enforcement statuses
+        published_by TEXT NOT NULL DEFAULT 'super-admin',
+        change_summary TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (plan_id) REFERENCES subscription_plans(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS backend_capabilities (
+        id TEXT PRIMARY KEY,
+        capability_key TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        data_type TEXT NOT NULL,
+        supported_audience TEXT NOT NULL DEFAULT 'BUSINESS',
+        enforcement_handler TEXT,
+        enforcement_status TEXT NOT NULL DEFAULT 'UNVERIFIED', -- 'ENFORCED', 'UNVERIFIED', 'UNAVAILABLE'
+        validation_rules TEXT, -- JSON
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_sub_plan ON subscriptions(plan_id);
       CREATE INDEX IF NOT EXISTS idx_sub_expiry ON subscriptions(expiry_date);
 
@@ -1009,6 +1083,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ('tmpl_welcome_cust', 'Customer Welcome Onboarding', 'CUSTOMER_WELCOME', 'TRANSACTIONAL', 'Welcome to HELLO, {{first_name}}! Discover Top Businesses Near You', 'Explore verified stores, doctors, and services in {{city}}.', 'Welcome to HELLO', 'Hello {{first_name}},', '<p>Your account is ready. Discover verified local businesses, connect with nearby merchants, and request instant callback quotes across Vijayawada, Guntur and Andhra Pradesh.</p>', 'Explore HELLO', 'https://hello-hi.in', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
         ('tmpl_enquiry_rcvd', 'Merchant New Lead Alert', 'MERCHANT_NEW_ENQUIRY', 'TRANSACTIONAL', 'New Customer Enquiry Received: {{service_name}} [Ref: {{enquiry_reference}}]', 'A verified customer in {{locality}} requested a callback.', 'New Enquiry Alert', 'Hello {{business_name}},', '<p>A customer has just requested details for <strong>{{service_name}}</strong> in your area. Log in to your merchant dashboard to respond immediately.</p>', 'Open Enquiry', 'https://hello-hi.in/merchant/enquiries', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
         ('tmpl_kyc_approved', 'Merchant KYC Verification Approved', 'MERCHANT_KYC_APPROVED', 'TRANSACTIONAL', 'Congratulations! Your Merchant Listing {{business_name}} is Live', 'Your verified trust badge is now activated on HELLO.', 'KYC Approved & Verified', 'Hello {{business_name}},', '<p>Your KYC documentation has been reviewed and verified by our compliance team. Your business profile is now live with the green verified trust badge.</p>', 'View Live Profile', 'https://hello-hi.in/business/profile', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
+        ('tmpl_kyc_rejected', 'Merchant KYC Verification Requires Attention', 'MERCHANT_KYC_REJECTED', 'TRANSACTIONAL', 'KYC Verification Update for {{business_name}}: Documents Require Attention', 'Your KYC verification request requires corrections.', 'KYC Verification Update', 'Hello {{business_name}},', '<p>Our compliance team has reviewed your KYC documentation. Unfortunately, your submission could not be verified at this stage.</p><p><strong>Reason for Rejection:</strong> {{rejection_reason}}</p><p>Please review the remarks, re-upload clear government-issued proofs or GST certificates, and resubmit through your merchant dashboard.</p>', 'Update Documents', 'https://hello-hi.in/merchant/kyc', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
+        ('tmpl_kyc_reminder', 'Merchant KYC Verification Reminder', 'MERCHANT_KYC_REMINDER', 'TRANSACTIONAL', 'Action Required: Complete KYC Verification for {{business_name}}', 'Submit your verification documents to unlock your verified trust badge.', 'Complete Your KYC Verification', 'Hello {{first_name}},', '<p>We noticed that your business profile for <strong>{{business_name}}</strong> has pending KYC documents.</p><p>Completing your business KYC verification unlocks the official <strong>Green Verified Trust Badge</strong>, builds instant trust with customers, and boosts your discovery ranking in {{city}}.</p><p>Please upload clear copies of your business registration proofs (such as GST Certificate, Trade License, FSSAI, or PAN Card) to get verified.</p>', 'Complete KYC Verification', 'https://hello-hi.in/merchant/kyc', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
         ('tmpl_sub_activated', 'Merchant Subscription Pro Activated', 'SUBSCRIPTION_ACTIVATED', 'TRANSACTIONAL', 'Payment Received: Growth Merchant Pro Subscription Active', 'Tax Invoice and receipt for your subscription.', 'Subscription Activated', 'Dear Partner,', '<p>We received your subscription payment of {{amount}} for <strong>Growth Merchant Pro</strong>. Your premium priority placement is now active for 30 days.</p>', 'Download Invoice', 'https://hello-hi.in/merchant/invoices', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}');
 
         INSERT OR IGNORE INTO email_event_mappings (
@@ -1017,6 +1093,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ('evt_1', 'CUSTOMER_WELCOME', 'Customer Registration Welcome', 'Triggered when a consumer completes OTP sign-up', 'CUSTOMER', 'CUSTOMER_WELCOME', 1, 1, '${nowIso}'),
         ('evt_2', 'MERCHANT_NEW_ENQUIRY', 'New Enquiry Notification', 'Triggered when a lead is submitted to a merchant', 'MERCHANT', 'MERCHANT_NEW_ENQUIRY', 1, 1, '${nowIso}'),
         ('evt_3', 'MERCHANT_KYC_APPROVED', 'Business KYC Verification Approved', 'Triggered upon Super Admin KYC approval', 'MERCHANT', 'MERCHANT_KYC_APPROVED', 1, 1, '${nowIso}'),
+        ('evt_3b', 'MERCHANT_KYC_REJECTED', 'Business KYC Verification Rejected', 'Triggered upon Super Admin KYC rejection with remarks', 'MERCHANT', 'MERCHANT_KYC_REJECTED', 1, 1, '${nowIso}'),
+        ('evt_3c', 'MERCHANT_KYC_REMINDER', 'Business KYC Verification Reminder', 'Dispatched manually or automatically to prompt merchant KYC submission', 'MERCHANT', 'MERCHANT_KYC_REMINDER', 1, 1, '${nowIso}'),
         ('evt_4', 'SUBSCRIPTION_ACTIVATED', 'Subscription Pro Paid & Activated', 'Triggered upon successful gateway payment', 'MERCHANT', 'SUBSCRIPTION_ACTIVATED', 1, 0, '${nowIso}');
 
         INSERT OR IGNORE INTO email_delivery_logs (
@@ -2149,6 +2227,297 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       for (const s of sampleSubs) {
         insertSub.run(s.id, s.name, s.email, s.phone, s.planId, s.planName, s.status, s.amount, "INR", s.start, s.end, s.auto, s.payStatus, s.start, s.start);
       }
+    }
+
+    // 6b. Enterprise Backend Capabilities & Benefits Seed (Stage 1)
+    try {
+      const capCount = this.db.prepare("SELECT COUNT(*) as count FROM backend_capabilities").get() as { count: number };
+      if (capCount.count === 0) {
+        const insertCap = this.db.prepare(`
+          INSERT INTO backend_capabilities (id, capability_key, name, description, data_type, supported_audience, enforcement_handler, enforcement_status, validation_rules, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        `);
+
+        insertCap.run(
+          "cap_verified_badge",
+          "verified_badge",
+          "Verified Merchant Trust Badge",
+          "Official green verified trust badge displayed on storefront and search results.",
+          "BOOLEAN",
+          "BUSINESS",
+          "BusinessVerificationGuard",
+          "ENFORCED",
+          JSON.stringify({ type: "boolean" }),
+          now,
+          now
+        );
+
+        insertCap.run(
+          "cap_max_listings",
+          "business.max_listings",
+          "Maximum Business Listings",
+          "Limit on number of branch or storefront listings the partner can create.",
+          "INTEGER",
+          "BUSINESS",
+          "BusinessCreationLimiter",
+          "ENFORCED",
+          JSON.stringify({ min: 1, max: 100 }),
+          now,
+          now
+        );
+
+        insertCap.run(
+          "cap_monthly_quota",
+          "enquiry.monthly_quota",
+          "Monthly Customer Lead Quota",
+          "Volume of verified instant customer enquiries routed directly to merchant.",
+          "QUOTA",
+          "BUSINESS",
+          "EnquiryQuotaEnforcer",
+          "UNVERIFIED",
+          JSON.stringify({ min: 0, resetPeriod: "MONTHLY" }),
+          now,
+          now
+        );
+
+        insertCap.run(
+          "cap_priority_boost",
+          "search.priority_boost",
+          "Search Ranking Boost Priority",
+          "Algorithmic multiplier applied in local neighborhood search results.",
+          "ENUM",
+          "BUSINESS",
+          "SearchRankingService",
+          "UNVERIFIED",
+          JSON.stringify({ allowed: ["STANDARD", "TOP_5", "TOP_1"] }),
+          now,
+          now
+        );
+
+        insertCap.run(
+          "cap_support_level",
+          "support.level",
+          "Support Service Level",
+          "Designated customer support channel and response SLA.",
+          "ENUM",
+          "BUSINESS",
+          null,
+          "DISPLAY_ONLY",
+          JSON.stringify({ allowed: ["STANDARD", "PHONE", "DEDICATED_RM"] }),
+          now,
+          now
+        );
+      }
+
+      const benCount = this.db.prepare("SELECT COUNT(*) as count FROM benefit_definitions").get() as { count: number };
+      if (benCount.count === 0) {
+        const insertBen = this.db.prepare(`
+          INSERT INTO benefit_definitions (id, benefit_key, name, description, category, data_type, unit, default_value, min_value, max_value, allowed_values, reset_period, supported_audiences, capability_binding, enforcement_status, is_active, display_order, icon, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        `);
+
+        insertBen.run(
+          "ben_badge",
+          "verified_badge",
+          "Official Verified Merchant Badge",
+          "Displays the green verification checkmark and trust badge on search results and business profile.",
+          "TRUST_AND_VERIFICATION",
+          "BOOLEAN",
+          null,
+          "true",
+          null,
+          null,
+          null,
+          "NONE",
+          JSON.stringify(["BUSINESS"]),
+          "verified_badge",
+          "ENFORCED",
+          1,
+          "CheckCircle",
+          now,
+          now
+        );
+
+        insertBen.run(
+          "ben_listings",
+          "business.max_listings",
+          "Storefront Listings Allowed",
+          "Maximum number of business outlets or branches allowed under this subscription.",
+          "LISTING_CAPACITY",
+          "INTEGER",
+          "listings",
+          "1",
+          1,
+          50,
+          null,
+          "NONE",
+          JSON.stringify(["BUSINESS"]),
+          "business.max_listings",
+          "ENFORCED",
+          2,
+          "Building",
+          now,
+          now
+        );
+
+        insertBen.run(
+          "ben_leads",
+          "enquiry.monthly_quota",
+          "Monthly Verified Instant Leads",
+          "Number of instant customer callback and enquiry leads allocated per month.",
+          "LEADS_AND_ENQUIRIES",
+          "QUOTA",
+          "leads/month",
+          "25",
+          0,
+          10000,
+          null,
+          "MONTHLY",
+          JSON.stringify(["BUSINESS"]),
+          "enquiry.monthly_quota",
+          "UNVERIFIED",
+          3,
+          "Users",
+          now,
+          now
+        );
+
+        insertBen.run(
+          "ben_placement",
+          "search.priority_boost",
+          "Category Search Placement",
+          "Placement tier in category search results (Standard, Top 5 Boost, or Pinned Top 1).",
+          "DISCOVERY_BOOST",
+          "ENUM",
+          null,
+          "STANDARD",
+          null,
+          null,
+          JSON.stringify(["STANDARD", "TOP_5", "TOP_1"]),
+          "NONE",
+          JSON.stringify(["BUSINESS"]),
+          "search.priority_boost",
+          "UNVERIFIED",
+          4,
+          "TrendingUp",
+          now,
+          now
+        );
+
+        insertBen.run(
+          "ben_support",
+          "support.level",
+          "Dedicated Partner Support",
+          "Direct assistance level provided by HELLO merchant operations team.",
+          "SUPPORT_SLA",
+          "ENUM",
+          null,
+          "STANDARD",
+          null,
+          null,
+          JSON.stringify(["STANDARD", "PHONE", "DEDICATED_RM"]),
+          "NONE",
+          JSON.stringify(["BUSINESS"]),
+          "support.level",
+          "DISPLAY_ONLY",
+          5,
+          "Headphones",
+          now,
+          now
+        );
+      }
+
+      // Initial Seed for Plan Benefit Assignments
+      const assignCount = this.db.prepare("SELECT COUNT(*) as count FROM plan_benefit_assignments").get() as { count: number };
+      if (assignCount.count === 0) {
+        const insertAssign = this.db.prepare(`
+          INSERT INTO plan_benefit_assignments (id, plan_id, benefit_id, assigned_value, display_order, is_visible, is_highlighted, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        // Plan Starter Assignments
+        insertAssign.run("pba_1", "plan_starter", "ben_badge", "true", 1, 1, 1, now, now);
+        insertAssign.run("pba_2", "plan_starter", "ben_listings", "1", 2, 1, 0, now, now);
+        insertAssign.run("pba_3", "plan_starter", "ben_leads", "25", 3, 1, 1, now, now);
+        insertAssign.run("pba_4", "plan_starter", "ben_placement", "STANDARD", 4, 1, 0, now, now);
+        insertAssign.run("pba_5", "plan_starter", "ben_support", "STANDARD", 5, 1, 0, now, now);
+
+        // Plan Growth Assignments
+        insertAssign.run("pba_6", "plan_growth", "ben_badge", "true", 1, 1, 1, now, now);
+        insertAssign.run("pba_7", "plan_growth", "ben_listings", "3", 2, 1, 0, now, now);
+        insertAssign.run("pba_8", "plan_growth", "ben_leads", "100", 3, 1, 1, now, now);
+        insertAssign.run("pba_9", "plan_growth", "ben_placement", "TOP_5", 4, 1, 1, now, now);
+        insertAssign.run("pba_10", "plan_growth", "ben_support", "PHONE", 5, 1, 0, now, now);
+
+        // Plan Enterprise Assignments
+        insertAssign.run("pba_11", "plan_enterprise", "ben_badge", "true", 1, 1, 1, now, now);
+        insertAssign.run("pba_12", "plan_enterprise", "ben_listings", "15", 2, 1, 1, now, now);
+        insertAssign.run("pba_13", "plan_enterprise", "ben_leads", "1000", 3, 1, 1, now, now);
+        insertAssign.run("pba_14", "plan_enterprise", "ben_placement", "TOP_1", 4, 1, 1, now, now);
+        insertAssign.run("pba_15", "plan_enterprise", "ben_support", "DEDICATED_RM", 5, 1, 1, now, now);
+      }
+
+      // Initial Seed for Plan Versions Snapshot (V1 for existing plans)
+      const verCount = this.db.prepare("SELECT COUNT(*) as count FROM plan_versions").get() as { count: number };
+      if (verCount.count === 0) {
+        const insertVer = this.db.prepare(`
+          INSERT INTO plan_versions (id, plan_id, version_number, name, plan_code, price, currency, billing_interval, features_snapshot, benefits_snapshot, published_by, change_summary, created_at)
+          VALUES (?, ?, 1, ?, ?, ?, 'INR', 'MONTHLY', ?, ?, 'super-admin', 'Initial production release version v1.0', ?)
+        `);
+
+        insertVer.run(
+          "ver_plan_starter_v1",
+          "plan_starter",
+          "Hyperlocal Starter",
+          "HYPERLOCAL_STARTER",
+          2999,
+          JSON.stringify(["Official Verified Merchant Badge", "25 Instant Customer Leads / mo", "WhatsApp Direct Enquiry Button", "Standard Neighborhood Radius Indexing", "Basic Review Management"]),
+          JSON.stringify([
+            { key: "verified_badge", value: true, enforcement: "ENFORCED" },
+            { key: "business.max_listings", value: 1, enforcement: "ENFORCED" },
+            { key: "enquiry.monthly_quota", value: 25, enforcement: "UNVERIFIED" },
+            { key: "search.priority_boost", value: "STANDARD", enforcement: "UNVERIFIED" },
+            { key: "support.level", value: "STANDARD", enforcement: "DISPLAY_ONLY" }
+          ]),
+          now
+        );
+
+        insertVer.run(
+          "ver_plan_growth_v1",
+          "plan_growth",
+          "Growth Merchant Pro",
+          "GROWTH_MERCHANT_PRO",
+          7999,
+          JSON.stringify(["Top 5 Category Search Placement", "100 Verified Instant Leads / mo", "Real-time SMS & WhatsApp Alerts", "Photo Gallery (up to 30 images)", "Competitor Protection on Listing Page", "Dedicated Phone Support"]),
+          JSON.stringify([
+            { key: "verified_badge", value: true, enforcement: "ENFORCED" },
+            { key: "business.max_listings", value: 3, enforcement: "ENFORCED" },
+            { key: "enquiry.monthly_quota", value: 100, enforcement: "UNVERIFIED" },
+            { key: "search.priority_boost", value: "TOP_5", enforcement: "UNVERIFIED" },
+            { key: "support.level", value: "PHONE", enforcement: "DISPLAY_ONLY" }
+          ]),
+          now
+        );
+
+        insertVer.run(
+          "ver_plan_enterprise_v1",
+          "plan_enterprise",
+          "Enterprise Multi-Outlet",
+          "ENTERPRISE_MULTI_OUTLET",
+          18999,
+          JSON.stringify(["Top 1 Pinned Sponsored Partner", "Unlimited Lead Routing & Zero Commission", "Multi-Outlet & Multi-Staff Management", "API & CRM Webhook Integration", "Dedicated Relationship Manager", "Custom Promo Banners on Category Page"]),
+          JSON.stringify([
+            { key: "verified_badge", value: true, enforcement: "ENFORCED" },
+            { key: "business.max_listings", value: 15, enforcement: "ENFORCED" },
+            { key: "enquiry.monthly_quota", value: 1000, enforcement: "UNVERIFIED" },
+            { key: "search.priority_boost", value: "TOP_1", enforcement: "UNVERIFIED" },
+            { key: "support.level", value: "DEDICATED_RM", enforcement: "DISPLAY_ONLY" }
+          ]),
+          now
+        );
+      }
+    } catch (e) {
+      console.error('Error seeding Stage 1 benefits architecture:', e);
     }
 
     // 7. Payments
