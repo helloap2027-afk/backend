@@ -24,6 +24,7 @@ export async function ensureSqlJs(): Promise<any> {
 export class DatabaseSync {
   private db: any;
   private filePath: string | null = null;
+  public inTransaction: boolean = false;
 
   constructor(location: string, sqlEngine?: any) {
     const engine = sqlEngine || SQL;
@@ -47,10 +48,15 @@ export class DatabaseSync {
   }
 
   public persist(): void {
+    if (this.inTransaction) return; // Do not export while SQLite write transaction is active
     if (this.filePath && this.db) {
-      const data = this.db.export();
-      const buffer = Buffer.from(data);
-      fs.writeFileSync(this.filePath, buffer);
+      try {
+        const data = this.db.export();
+        const buffer = Buffer.from(data);
+        fs.writeFileSync(this.filePath, buffer);
+      } catch (err: any) {
+        // Suppress busy export error while transaction commits
+      }
     }
   }
 
@@ -134,4 +140,3 @@ export class DatabaseSync {
     };
   }
 }
-

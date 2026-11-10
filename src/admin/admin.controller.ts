@@ -2,12 +2,14 @@ import { Controller, Get, Post, Put, Patch, Delete, Param, Body, Query, Req, Res
 import * as fs from "node:fs";
 import { AdminService } from "./admin.service";
 import { AuthService } from "../auth/auth.service";
+import { WalletLedgerService } from "../wallet/wallet-ledger.service";
 
 @Controller("admin")
 export class AdminController {
   constructor(
     private readonly adminService: AdminService,
-    private readonly authService: AuthService
+    private readonly authService: AuthService,
+    private readonly walletService: WalletLedgerService
   ) {}
 
   private extractAdminActor(req: any): string {
@@ -271,8 +273,183 @@ export class AdminController {
   }
 
   // =========================================================================
-  // PAYMENTS ENDPOINTS
+  // PAYMENTS & WALLET TRANSACTIONS ENDPOINTS
   // =========================================================================
+
+  @Get("payments/wallet-transactions")
+  getAdminWalletTransactions(
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("search") search?: string,
+    @Query("type") type?: string,
+    @Query("status") status?: string,
+    @Query("userType") userType?: string,
+    @Query("userId") userId?: string
+  ) {
+    const res = this.walletService.getAdminWalletTransactions({
+      page,
+      pageSize,
+      search,
+      type,
+      status,
+      userType,
+      userId,
+    });
+    return {
+      success: true,
+      ...res,
+    };
+  }
+
+  @Post("payments/wallet-transactions/bulk-delete")
+  bulkDeleteWalletTransactions(@Body("ids") ids: string[], @Req() req: any) {
+    this.extractAdminActor(req);
+    return this.walletService.bulkDeleteTransactions(ids);
+  }
+
+  @Delete("payments/wallet-transactions/:id")
+  deleteWalletTransaction(@Param("id") id: string, @Req() req: any) {
+    this.extractAdminActor(req);
+    return this.walletService.deleteTransaction(id);
+  }
+
+  // =========================================================================
+  // USER WALLET MANAGEMENT (VIEW & EDIT USER INTEGRATION)
+  // =========================================================================
+
+  @Get("users/:id/wallet")
+  getUserWallet(
+    @Param("id") id: string,
+    @Query("role") role?: "CUSTOMER" | "MERCHANT",
+    @Req() req?: any
+  ) {
+    this.extractAdminActor(req);
+    const userRole = role === "MERCHANT" ? "MERCHANT" : "CUSTOMER";
+    const wallet = this.walletService.getOrCreateWallet(id, userRole);
+    const summary = this.walletService.getWalletSummary(id, userRole);
+    return {
+      success: true,
+      data: {
+        ...wallet,
+        summary,
+      },
+    };
+  }
+
+  @Get("users/:id/wallet/transactions")
+  getUserWalletTransactions(
+    @Param("id") id: string,
+    @Query("role") role?: "CUSTOMER" | "MERCHANT",
+    @Query("page") page?: number,
+    @Query("pageSize") pageSize?: number,
+    @Query("type") type?: string,
+    @Query("status") status?: string,
+    @Query("search") search?: string,
+    @Req() req?: any
+  ) {
+    this.extractAdminActor(req);
+    const userRole = role === "MERCHANT" ? "MERCHANT" : "CUSTOMER";
+    const res = this.walletService.getUserTransactions(id, userRole, {
+      page,
+      pageSize,
+      type,
+      status,
+      search,
+    });
+    return {
+      success: true,
+      ...res,
+    };
+  }
+
+  @Post("users/:id/wallet/credit")
+  creditUserWallet(
+    @Param("id") id: string,
+    @Body() body: {
+      amount: number;
+      role?: "CUSTOMER" | "MERCHANT";
+      category?: string;
+      reason: string;
+      adminRemarks?: string;
+      externalRef?: string;
+      idempotencyKey?: string;
+    },
+    @Req() req: any
+  ) {
+    const adminId = this.extractAdminActor(req);
+    const userRole = body.role === "MERCHANT" ? "MERCHANT" : "CUSTOMER";
+    const res = this.walletService.creditWallet({
+      userId: id,
+      userType: userRole,
+      amount: Number(body.amount),
+      category: body.category || "ADMIN_CREDIT",
+      reason: body.reason,
+      adminId,
+      adminRemarks: body.adminRemarks,
+      externalRef: body.externalRef,
+      idempotencyKey: body.idempotencyKey,
+    });
+    return {
+      success: true,
+      data: res,
+      message: `₹${Number(body.amount).toFixed(2)} credited to ${userRole.toLowerCase()} wallet successfully.`,
+    };
+  }
+
+  @Post("users/:id/wallet/debit")
+  debitUserWallet(
+    @Param("id") id: string,
+    @Body() body: {
+      amount: number;
+      role?: "CUSTOMER" | "MERCHANT";
+      category?: string;
+      reason: string;
+      adminRemarks?: string;
+      externalRef?: string;
+      idempotencyKey?: string;
+    },
+    @Req() req: any
+  ) {
+    const adminId = this.extractAdminActor(req);
+    const userRole = body.role === "MERCHANT" ? "MERCHANT" : "CUSTOMER";
+    const res = this.walletService.debitWallet({
+      userId: id,
+      userType: userRole,
+      amount: Number(body.amount),
+      category: body.category || "ADMIN_DEBIT",
+      reason: body.reason,
+      adminId,
+      adminRemarks: body.adminRemarks,
+      externalRef: body.externalRef,
+      idempotencyKey: body.idempotencyKey,
+    });
+    return {
+      success: true,
+      data: res,
+      message: `₹${Number(body.amount).toFixed(2)} debited from ${userRole.toLowerCase()} wallet successfully.`,
+    };
+  }
+
+  @Post("users/:id/wallet/status")
+  updateUserWalletStatus(
+    @Param("id") id: string,
+    @Body() body: {
+      role?: "CUSTOMER" | "MERCHANT";
+      status: "ACTIVE" | "FROZEN";
+      reason: string;
+    },
+    @Req() req: any
+  ) {
+    const adminId = this.extractAdminActor(req);
+    const userRole = body.role === "MERCHANT" ? "MERCHANT" : "CUSTOMER";
+    const wallet = this.walletService.getOrCreateWallet(id, userRole);
+    const updated = this.walletService.setWalletStatus(wallet.id, body.status, adminId, body.reason);
+    return {
+      success: true,
+      data: updated,
+      message: `Wallet status updated to ${body.status}.`,
+    };
+  }
 
   @Get("payments")
   getPayments(

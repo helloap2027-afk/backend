@@ -58,7 +58,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         "business_owners", "business_media", "business_staff", "enquiries", "enquiry_events",
         "reviews", "saved_businesses", "cms_pages", "cms_revisions", "cms_audit_logs",
         "contact_submissions", "audit_logs", "payments", "subscription_plans",
-        "subscriptions", "notifications", "wallet_transactions", "withdrawals",
+        "subscriptions", "notifications", "wallets", "wallet_transactions", "withdrawals",
         "auth_mfa_challenges", "ad_campaigns", "coupons", "coupon_redemptions",
         "in_app_notifications", "push_templates", "normal_push_logs",
         "business_kyc_documents"
@@ -112,13 +112,31 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     // Enable foreign keys
     this.db.exec("PRAGMA foreign_keys = ON;");
 
-    this.createTables();
     try { this.db.exec("ALTER TABLE businesses ADD COLUMN business_type TEXT DEFAULT 'Sole Proprietor';"); } catch {}
+    try { this.db.exec("ALTER TABLE businesses ADD COLUMN profile_views INTEGER DEFAULT 0;"); } catch {}
+    try { this.db.exec("ALTER TABLE businesses ADD COLUMN calls_received INTEGER DEFAULT 0;"); } catch {}
     try { this.db.exec("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'English';"); } catch {}
     try { this.db.exec("ALTER TABLE otp_challenges ADD COLUMN role TEXT DEFAULT 'CUSTOMER';"); } catch {}
     try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_type TEXT;"); } catch {}
     try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_number TEXT;"); } catch {}
     try { this.db.exec("ALTER TABLE users ADD COLUMN identity_proof_file_url TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN user_id TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN business_id TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN category TEXT DEFAULT 'GENERAL';"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN amount_paise INTEGER DEFAULT 0;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN balance_before REAL DEFAULT 0;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN balance_before_paise INTEGER DEFAULT 0;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN balance_after_paise INTEGER DEFAULT 0;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN reason TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN admin_id TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN admin_remarks TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN idempotency_key TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE wallet_transactions ADD COLUMN correlation_id TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE notification_outbox ADD COLUMN sent_at TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE notification_outbox ADD COLUMN delivered_at TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE notification_outbox ADD COLUMN updated_at TEXT;"); } catch {}
+
+    this.createTables();
     this.seedDefaults();
   }
 
@@ -244,7 +262,33 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         category_id TEXT NOT NULL,
         name TEXT NOT NULL,
         slug TEXT NOT NULL,
+        description TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS business_types (
+        id TEXT PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS document_types (
+        id TEXT PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        category TEXT DEFAULT 'BUSINESS_PROOF',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS businesses (
@@ -540,9 +584,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         billing_interval TEXT NOT NULL DEFAULT 'MONTHLY',
         features TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'ACTIVE',
+        audience TEXT NOT NULL DEFAULT 'BUSINESS',
+        is_popular INTEGER NOT NULL DEFAULT 0,
+        annual_price REAL,
+        display_order INTEGER NOT NULL DEFAULT 0,
+        button_text TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+    `);
+
+    // Schema migration safe guards for subscription_plans
+    try { this.db.exec("ALTER TABLE subscription_plans ADD COLUMN audience TEXT NOT NULL DEFAULT 'BUSINESS';"); } catch {}
+    try { this.db.exec("ALTER TABLE subscription_plans ADD COLUMN is_popular INTEGER NOT NULL DEFAULT 0;"); } catch {}
+    try { this.db.exec("ALTER TABLE subscription_plans ADD COLUMN annual_price REAL;"); } catch {}
+    try { this.db.exec("ALTER TABLE subscription_plans ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0;"); } catch {}
+    try { this.db.exec("ALTER TABLE subscription_plans ADD COLUMN button_text TEXT;"); } catch {}
+
+    this.db.exec(`
 
       CREATE TABLE IF NOT EXISTS subscriptions (
         id TEXT PRIMARY KEY,
@@ -663,18 +722,49 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       -- =========================================================================
       -- WALLET TRANSACTIONS & WITHDRAWALS SCHEMA
       -- =========================================================================
+      CREATE TABLE IF NOT EXISTS wallets (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        business_id TEXT,
+        user_type TEXT NOT NULL, -- 'CUSTOMER' | 'MERCHANT'
+        currency TEXT NOT NULL DEFAULT 'INR',
+        balance_paise INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'ACTIVE', -- 'ACTIVE' | 'FROZEN' | 'SUSPENDED'
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(user_id, user_type)
+      );
+      CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets(user_id, user_type);
+      CREATE INDEX IF NOT EXISTS idx_wallets_business ON wallets(business_id);
+
       CREATE TABLE IF NOT EXISTS wallet_transactions (
         id TEXT PRIMARY KEY,
         wallet_id TEXT NOT NULL,
+        user_id TEXT,
+        business_id TEXT,
         user_name TEXT NOT NULL,
-        user_type TEXT NOT NULL,
-        type TEXT NOT NULL,
+        user_type TEXT NOT NULL, -- 'CUSTOMER' | 'MERCHANT'
+        type TEXT NOT NULL, -- 'CREDIT' | 'DEBIT' | 'REFUND' | 'TOPUP' | 'WITHDRAWAL'
+        category TEXT DEFAULT 'GENERAL', -- 'ADMIN_CREDIT' | 'ADMIN_DEBIT' | 'TOPUP' | 'SUBSCRIPTION' | 'REWARD' | 'REFUND'
         amount REAL NOT NULL,
+        amount_paise INTEGER NOT NULL DEFAULT 0,
+        balance_before REAL NOT NULL DEFAULT 0,
+        balance_before_paise INTEGER NOT NULL DEFAULT 0,
         balance_after REAL NOT NULL,
+        balance_after_paise INTEGER NOT NULL DEFAULT 0,
         reference TEXT NOT NULL,
-        status TEXT NOT NULL,
+        reason TEXT,
+        admin_id TEXT,
+        admin_remarks TEXT,
+        idempotency_key TEXT UNIQUE,
+        correlation_id TEXT,
+        status TEXT NOT NULL DEFAULT 'SUCCESS', -- 'SUCCESS' | 'PENDING' | 'FAILED' | 'REVERSED'
         created_at TEXT NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_wt_wallet ON wallet_transactions(wallet_id);
+      CREATE INDEX IF NOT EXISTS idx_wt_user ON wallet_transactions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_wt_idempotency ON wallet_transactions(idempotency_key);
+      CREATE INDEX IF NOT EXISTS idx_wt_created ON wallet_transactions(created_at);
 
       CREATE TABLE IF NOT EXISTS withdrawals (
         id TEXT PRIMARY KEY,
@@ -1002,18 +1092,165 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         sent_at TEXT NOT NULL
       );
 
+      -- =========================================================================
+      -- HELP CENTER & SUPPORT SCHEMA
+      -- =========================================================================
+      CREATE TABLE IF NOT EXISTS help_categories (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        subtitle TEXT,
+        slug TEXT UNIQUE NOT NULL,
+        icon TEXT NOT NULL,
+        audience TEXT NOT NULL DEFAULT 'GENERAL',
+        display_order INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PUBLISHED',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_help_cat_audience ON help_categories(audience);
+      CREATE INDEX IF NOT EXISTS idx_help_cat_status ON help_categories(status);
+
+      CREATE TABLE IF NOT EXISTS help_articles (
+        id TEXT PRIMARY KEY,
+        category_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        slug TEXT UNIQUE NOT NULL,
+        summary TEXT,
+        content TEXT NOT NULL,
+        audience TEXT NOT NULL DEFAULT 'GENERAL',
+        search_keywords TEXT,
+        is_popular INTEGER NOT NULL DEFAULT 0,
+        views_count INTEGER NOT NULL DEFAULT 0,
+        helpful_count INTEGER NOT NULL DEFAULT 0,
+        not_helpful_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PUBLISHED',
+        display_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (category_id) REFERENCES help_categories(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_help_art_audience ON help_articles(audience);
+      CREATE INDEX IF NOT EXISTS idx_help_art_category ON help_articles(category_id);
+      CREATE INDEX IF NOT EXISTS idx_help_art_status ON help_articles(status);
+
+      CREATE TABLE IF NOT EXISTS support_channels (
+        id TEXT PRIMARY KEY,
+        channel_type TEXT NOT NULL,
+        label TEXT NOT NULL,
+        value TEXT NOT NULL,
+        audience TEXT NOT NULL DEFAULT 'GENERAL',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        display_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS support_tickets (
+        id TEXT PRIMARY KEY,
+        ticket_number TEXT UNIQUE NOT NULL,
+        user_id TEXT,
+        business_id TEXT,
+        audience TEXT NOT NULL DEFAULT 'CUSTOMER',
+        category TEXT NOT NULL,
+        subcategory TEXT,
+        subject TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        priority TEXT NOT NULL DEFAULT 'NORMAL',
+        department TEXT DEFAULT 'Customer Support',
+        assigned_to TEXT,
+        assigned_agent_name TEXT,
+        source TEXT DEFAULT 'WEBSITE',
+        related_entity_type TEXT,
+        related_entity_id TEXT,
+        first_response_due_at TEXT,
+        resolution_due_at TEXT,
+        first_responded_at TEXT,
+        resolved_at TEXT,
+        closed_at TEXT,
+        reopened_at TEXT,
+        resolution_category TEXT,
+        resolution_summary TEXT,
+        sla_status TEXT DEFAULT 'WITHIN_SLA',
+        admin_notes TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_tickets_user ON support_tickets(user_id);
+      CREATE INDEX IF NOT EXISTS idx_tickets_status ON support_tickets(status);
+
+      CREATE TABLE IF NOT EXISTS ticket_messages (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_role TEXT NOT NULL DEFAULT 'CUSTOMER',
+        message TEXT NOT NULL,
+        is_internal_note INTEGER DEFAULT 0,
+        attachments_json TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_msg_ticket ON ticket_messages(ticket_id);
+
+      CREATE TABLE IF NOT EXISTS ticket_audit_logs (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        actor_id TEXT,
+        actor_name TEXT NOT NULL,
+        actor_role TEXT NOT NULL,
+        action TEXT NOT NULL,
+        previous_state TEXT,
+        new_state TEXT,
+        reason TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_ticket ON ticket_audit_logs(ticket_id);
+
+      CREATE TABLE IF NOT EXISTS support_departments (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        lead_agent_id TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS support_canned_responses (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL,
+        audience TEXT DEFAULT 'ALL',
+        body_text TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+
 `);
 
     // Safe dynamic column migrations for existing SQLite databases
-    try {
-      this.db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT;");
-    } catch {}
-    try {
-      this.db.exec("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'English';");
-    } catch {}
-    try {
-      this.db.exec("ALTER TABLE users ADD COLUMN locality_id TEXT;");
-    } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'English';"); } catch {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN locality_id TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN subcategory TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN department TEXT DEFAULT 'Customer Support';"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN assigned_to TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN assigned_agent_name TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN source TEXT DEFAULT 'WEBSITE';"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN related_entity_type TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN related_entity_id TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN first_response_due_at TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN resolution_due_at TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN first_responded_at TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN resolved_at TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN closed_at TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN reopened_at TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN resolution_category TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN resolution_summary TEXT;"); } catch {}
+    try { this.db.exec("ALTER TABLE support_tickets ADD COLUMN sla_status TEXT DEFAULT 'WITHIN_SLA';"); } catch {}
+
   }
 
   private seedDefaults() {
@@ -1085,7 +1322,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ('tmpl_kyc_approved', 'Merchant KYC Verification Approved', 'MERCHANT_KYC_APPROVED', 'TRANSACTIONAL', 'Congratulations! Your Merchant Listing {{business_name}} is Live', 'Your verified trust badge is now activated on HELLO.', 'KYC Approved & Verified', 'Hello {{business_name}},', '<p>Your KYC documentation has been reviewed and verified by our compliance team. Your business profile is now live with the green verified trust badge.</p>', 'View Live Profile', 'https://hello-hi.in/business/profile', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
         ('tmpl_kyc_rejected', 'Merchant KYC Verification Requires Attention', 'MERCHANT_KYC_REJECTED', 'TRANSACTIONAL', 'KYC Verification Update for {{business_name}}: Documents Require Attention', 'Your KYC verification request requires corrections.', 'KYC Verification Update', 'Hello {{business_name}},', '<p>Our compliance team has reviewed your KYC documentation. Unfortunately, your submission could not be verified at this stage.</p><p><strong>Reason for Rejection:</strong> {{rejection_reason}}</p><p>Please review the remarks, re-upload clear government-issued proofs or GST certificates, and resubmit through your merchant dashboard.</p>', 'Update Documents', 'https://hello-hi.in/merchant/kyc', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
         ('tmpl_kyc_reminder', 'Merchant KYC Verification Reminder', 'MERCHANT_KYC_REMINDER', 'TRANSACTIONAL', 'Action Required: Complete KYC Verification for {{business_name}}', 'Submit your verification documents to unlock your verified trust badge.', 'Complete Your KYC Verification', 'Hello {{first_name}},', '<p>We noticed that your business profile for <strong>{{business_name}}</strong> has pending KYC documents.</p><p>Completing your business KYC verification unlocks the official <strong>Green Verified Trust Badge</strong>, builds instant trust with customers, and boosts your discovery ranking in {{city}}.</p><p>Please upload clear copies of your business registration proofs (such as GST Certificate, Trade License, FSSAI, or PAN Card) to get verified.</p>', 'Complete KYC Verification', 'https://hello-hi.in/merchant/kyc', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
-        ('tmpl_sub_activated', 'Merchant Subscription Pro Activated', 'SUBSCRIPTION_ACTIVATED', 'TRANSACTIONAL', 'Payment Received: Growth Merchant Pro Subscription Active', 'Tax Invoice and receipt for your subscription.', 'Subscription Activated', 'Dear Partner,', '<p>We received your subscription payment of {{amount}} for <strong>Growth Merchant Pro</strong>. Your premium priority placement is now active for 30 days.</p>', 'Download Invoice', 'https://hello-hi.in/merchant/invoices', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}');
+        ('tmpl_sub_activated', 'Merchant Subscription Pro Activated', 'SUBSCRIPTION_ACTIVATED', 'TRANSACTIONAL', 'Payment Received: Growth Merchant Pro Subscription Active', 'Tax Invoice and receipt for your subscription.', 'Subscription Activated', 'Dear Partner,', '<p>We received your subscription payment of {{amount}} for <strong>Growth Merchant Pro</strong>. Your premium priority placement is now active for 30 days.</p>', 'Download Invoice', 'https://hello-hi.in/merchant/invoices', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
+        ('tmpl_wlt_cr_email', 'Wallet Credit Confirmation', 'WALLET_CREDITED_EMAIL', 'TRANSACTIONAL', 'HELLO-Hi Wallet Credited — ₹{{amount}}', 'Your HELLO-Hi wallet has been credited.', 'Wallet Credited Successfully', 'Hello {{user_name}},', '<p>An amount of <strong>₹{{amount}}</strong> has been successfully credited to your HELLO-Hi {{wallet_type}} wallet.</p><p><strong>Transaction Reference:</strong> {{transaction_reference}}<br/><strong>Date & Time:</strong> {{transaction_date}}<br/><strong>Reason:</strong> {{reason}}<br/><strong>Current Available Balance:</strong> ₹{{available_balance}}</p><p>You can view the transaction securely in your HELLO-Hi account.</p>', 'View Wallet', '{{wallet_url}}', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}'),
+        ('tmpl_wlt_db_email', 'Wallet Debit Confirmation', 'WALLET_DEBITED_EMAIL', 'TRANSACTIONAL', 'HELLO-Hi Wallet Debit Confirmation — ₹{{amount}}', 'Your HELLO-Hi wallet has been debited.', 'Wallet Debited', 'Hello {{user_name}},', '<p>An amount of <strong>₹{{amount}}</strong> has been debited from your HELLO-Hi {{wallet_type}} wallet.</p><p><strong>Transaction Reference:</strong> {{transaction_reference}}<br/><strong>Date & Time:</strong> {{transaction_date}}<br/><strong>Reason:</strong> {{reason}}<br/><strong>Current Available Balance:</strong> ₹{{available_balance}}</p><p>You can review the transaction in your HELLO-Hi account.</p>', 'View Transaction', '{{wallet_url}}', 'PUBLISHED', 'v1.0', '${nowIso}', '${nowIso}');
 
         INSERT OR IGNORE INTO email_event_mappings (
           id, event_key, event_name, event_description, recipient_type, template_key, is_active, is_system_protected, updated_at
@@ -1095,7 +1334,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ('evt_3', 'MERCHANT_KYC_APPROVED', 'Business KYC Verification Approved', 'Triggered upon Super Admin KYC approval', 'MERCHANT', 'MERCHANT_KYC_APPROVED', 1, 1, '${nowIso}'),
         ('evt_3b', 'MERCHANT_KYC_REJECTED', 'Business KYC Verification Rejected', 'Triggered upon Super Admin KYC rejection with remarks', 'MERCHANT', 'MERCHANT_KYC_REJECTED', 1, 1, '${nowIso}'),
         ('evt_3c', 'MERCHANT_KYC_REMINDER', 'Business KYC Verification Reminder', 'Dispatched manually or automatically to prompt merchant KYC submission', 'MERCHANT', 'MERCHANT_KYC_REMINDER', 1, 1, '${nowIso}'),
-        ('evt_4', 'SUBSCRIPTION_ACTIVATED', 'Subscription Pro Paid & Activated', 'Triggered upon successful gateway payment', 'MERCHANT', 'SUBSCRIPTION_ACTIVATED', 1, 0, '${nowIso}');
+        ('evt_4', 'SUBSCRIPTION_ACTIVATED', 'Subscription Pro Paid & Activated', 'Triggered upon successful gateway payment', 'MERCHANT', 'SUBSCRIPTION_ACTIVATED', 1, 0, '${nowIso}'),
+        ('evt_wlt_cr', 'WALLET_CREDITED', 'Wallet Credited Event', 'Triggered when wallet balance is credited', 'ALL', 'WALLET_CREDITED_EMAIL', 1, 1, '${nowIso}'),
+        ('evt_wlt_db', 'WALLET_DEBITED', 'Wallet Debited Event', 'Triggered when wallet balance is debited', 'ALL', 'WALLET_DEBITED_EMAIL', 1, 1, '${nowIso}');
 
         INSERT OR IGNORE INTO email_delivery_logs (
           id, email_ref, email_category, recipient_email, recipient_masked, sender_email, subject, template_key, provider, delivery_status, created_at, submitted_at, delivered_at
@@ -1252,7 +1493,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       insertCat.run(c.id, null, c.name, c.slug, c.icon, `${c.name} in Andhra Pradesh`, c.desc, i + 1);
     }
 
-    // Services
+    // Services / Subcategories
     const insertService = this.db.prepare("INSERT OR IGNORE INTO services (id, category_id, name, slug) VALUES (?, ?, ?, ?)");
     insertService.run("srv-1", "cat-restaurants", "Family Dining", "family-dining");
     insertService.run("srv-2", "cat-restaurants", "Biryani & Tandoor", "biryani-tandoor");
@@ -1273,6 +1514,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     insertService.run("srv-17", "cat-pet-shops", "Pet Grooming & Spa", "pet-grooming");
     insertService.run("srv-18", "cat-pg-hostels", "Executive Men's AC PG", "mens-ac-pg");
     insertService.run("srv-19", "cat-estate-agent", "CRDA Open Plots & 3BHK", "crda-open-plots");
+
+    // Business Types (Constitution) Seed
+    const insertBType = this.db.prepare("INSERT OR IGNORE INTO business_types (id, code, name, description, sort_order, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)");
+    insertBType.run("btype-proprietor", "SOLE_PROPRIETOR", "Individual / Sole Proprietor", "Single owner business entity", 1, now, now);
+    insertBType.run("btype-partnership", "PARTNERSHIP", "Partnership Firm", "Registered or unregistered partnership firm", 2, now, now);
+    insertBType.run("btype-llp", "LLP", "Limited Liability Partnership (LLP)", "Registered under LLP Act 2008", 3, now, now);
+    insertBType.run("btype-pvt-ltd", "PVT_LTD", "Private Limited Company", "Registered under Companies Act 2013", 4, now, now);
+    insertBType.run("btype-pub-ltd", "PUB_LTD", "Public Limited Company", "Publicly held company", 5, now, now);
+    insertBType.run("btype-trust-society", "TRUST_SOCIETY", "Registered Trust / Society", "Non-profit, charitable trust or registered society", 6, now, now);
+
+    // Document Types Seed
+    const insertDocType = this.db.prepare("INSERT OR IGNORE INTO document_types (id, code, name, description, category, sort_order, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)");
+    insertDocType.run("doc-pan", "PAN_CARD", "Permanent Account Number (PAN)", "Identity & business taxation document", "IDENTITY_PROOF", 1, now, now);
+    insertDocType.run("doc-gst", "GST_CERTIFICATE", "GST Registration Certificate", "Goods and Services Tax registration", "BUSINESS_PROOF", 2, now, now);
+    insertDocType.run("doc-udyam", "UDYAM_MSME", "Udyam / MSME Certificate", "Ministry of Micro, Small and Medium Enterprises", "BUSINESS_PROOF", 3, now, now);
+    insertDocType.run("doc-fssai", "FSSAI_LICENSE", "FSSAI Food License", "Food Safety and Standards Authority of India", "STATUTORY_LICENSE", 4, now, now);
+    insertDocType.run("doc-trade", "TRADE_LICENSE", "Municipal Trade License", "Local urban local body trade permission", "STATUTORY_LICENSE", 5, now, now);
 
     // 4. Default Seed Vendor User (for business ownership integrity)
     let defaultVendor = this.db.prepare("SELECT id FROM users WHERE phone_number = ?").get("+919848099999") as { id: string } | undefined;
@@ -2137,73 +2395,178 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // 5. Subscription Plans
-    const plansCount = this.db.prepare("SELECT COUNT(*) as count FROM subscription_plans").get() as { count: number };
-    if (plansCount.count === 0) {
-      const insertPlan = this.db.prepare(`
-        INSERT INTO subscription_plans (id, name, description, price, currency, billing_interval, features, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
+    // 5. Subscription Plans (Role-Based: Business & Customer)
+    const existingPlans = this.db.prepare("SELECT id FROM subscription_plans").all() as { id: string }[];
+    const existingIds = new Set(existingPlans.map(p => p.id));
 
-      insertPlan.run(
-        "plan_starter",
-        "Hyperlocal Starter",
-        "Essential digital presence for neighborhood single-outlet stores.",
-        2999,
-        "INR",
-        "MONTHLY",
-        JSON.stringify([
-          "Official Verified Merchant Badge",
-          "25 Instant Customer Leads / mo",
-          "WhatsApp Direct Enquiry Button",
-          "Standard Neighborhood Radius Indexing",
-          "Basic Review Management"
-        ]),
-        "ACTIVE",
-        now,
-        now
-      );
+    const upsertPlan = this.db.prepare(`
+      INSERT INTO subscription_plans (id, name, description, price, currency, billing_interval, features, status, audience, is_popular, annual_price, display_order, button_text, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        description = excluded.description,
+        price = excluded.price,
+        currency = excluded.currency,
+        billing_interval = excluded.billing_interval,
+        features = excluded.features,
+        status = excluded.status,
+        audience = excluded.audience,
+        is_popular = excluded.is_popular,
+        annual_price = excluded.annual_price,
+        display_order = excluded.display_order,
+        button_text = excluded.button_text,
+        updated_at = excluded.updated_at
+    `);
 
-      insertPlan.run(
-        "plan_growth",
-        "Growth Merchant Pro",
-        "High-visibility placement for growing businesses and popular clinics.",
-        7999,
-        "INR",
-        "MONTHLY",
-        JSON.stringify([
-          "Top 5 Category Search Placement",
-          "100 Verified Instant Leads / mo",
-          "Real-time SMS & WhatsApp Alerts",
-          "Photo Gallery (up to 30 images)",
-          "Competitor Protection on Listing Page",
-          "Dedicated Phone Support"
-        ]),
-        "ACTIVE",
-        now,
-        now
-      );
+    // --- BUSINESS PARTNER PLANS (Exact from media_1793880730114_dc530ad2.jpg) ---
+    upsertPlan.run(
+      "plan_biz_free",
+      "Free Listing",
+      "Get your business on HELLO-Hi and start receiving enquiries.",
+      0,
+      "INR",
+      "MONTHLY",
+      JSON.stringify([
+        "Create & list your business profile",
+        "Receive a limited number of leads",
+        "Basic enquiry management",
+        "Be discoverable in search results"
+      ]),
+      "ACTIVE",
+      "BUSINESS",
+      0,
+      0,
+      1,
+      "Start Free Listing",
+      now,
+      now
+    );
 
-      insertPlan.run(
-        "plan_enterprise",
-        "Enterprise Multi-Outlet",
-        "Dominant sponsor status with unlimited leads and API integration.",
-        18999,
-        "INR",
-        "MONTHLY",
-        JSON.stringify([
-          "Top 1 Pinned Sponsored Partner",
-          "Unlimited Lead Routing & Zero Commission",
-          "Multi-Outlet & Multi-Staff Management",
-          "API & CRM Webhook Integration",
-          "Dedicated Relationship Manager",
-          "Custom Promo Banners on Category Page"
-        ]),
-        "ACTIVE",
-        now,
-        now
-      );
-    }
+    upsertPlan.run(
+      "plan_biz_growth",
+      "Growth Plan",
+      "Get more leads, build trust, and grow your business faster.",
+      799,
+      "INR",
+      "MONTHLY",
+      JSON.stringify([
+        "Everything in Free Listing, plus",
+        "More enquiries & higher lead limits",
+        "Verified business badge",
+        "Business analytics & interest insights",
+        "Profile boost for better visibility",
+        "Advanced enquiry management (track, respond, convert)"
+      ]),
+      "ACTIVE",
+      "BUSINESS",
+      1, // Most Popular
+      7990, // Save 17% (799 * 10)
+      2,
+      "Choose Growth Plan",
+      now,
+      now
+    );
+
+    upsertPlan.run(
+      "plan_biz_pro",
+      "Business Pro",
+      "Maximum visibility, more leads, and complete growth tools for serious businesses.",
+      1799,
+      "INR",
+      "MONTHLY",
+      JSON.stringify([
+        "Everything in Growth Plan, plus",
+        "Maximum lead exposure & priority in results",
+        "Enhanced profile boost across key sections",
+        "Marketing visibility (featured placements & campaigns)",
+        "Priority support with faster resolution",
+        "Advanced business analytics & performance reports"
+      ]),
+      "ACTIVE",
+      "BUSINESS",
+      0,
+      17990, // Save 17% (1799 * 10)
+      3,
+      "Choose Business Pro",
+      now,
+      now
+    );
+
+    // --- CUSTOMER PLANS (Exact from media_1793880738920_e242de4c.jpg) ---
+    upsertPlan.run(
+      "plan_cust_free",
+      "Free",
+      "Get started with essential benefits at no cost.",
+      0,
+      "INR",
+      "MONTHLY",
+      JSON.stringify([
+        "Basic service discounts (up to 5%)",
+        "Standard customer support",
+        "Access to select offers",
+        "Regular booking (standard speed)",
+        "Earn reward points (1x)",
+        "General warranty assistance (guidance)"
+      ]),
+      "ACTIVE",
+      "CUSTOMER",
+      0,
+      0,
+      1,
+      "Continue with Free Plan",
+      now,
+      now
+    );
+
+    upsertPlan.run(
+      "plan_cust_plus",
+      "Customer Plus",
+      "More savings, priority support, and added customer benefits.",
+      199,
+      "INR",
+      "MONTHLY",
+      JSON.stringify([
+        "Higher service discounts (up to 15%)",
+        "Priority customer support",
+        "Exclusive customer-only offers & early access",
+        "Faster booking with priority slots",
+        "Earn more reward points (2x)",
+        "Warranty assistance with end-to-end support"
+      ]),
+      "ACTIVE",
+      "CUSTOMER",
+      1, // Most Popular
+      1990,
+      2,
+      "Choose Customer Plus",
+      now,
+      now
+    );
+
+    upsertPlan.run(
+      "plan_cust_premium",
+      "Customer Premium",
+      "Maximum savings, premium support, and the best customer experience.",
+      349,
+      "INR",
+      "MONTHLY",
+      JSON.stringify([
+        "Highest service discounts (up to 25%)",
+        "24x7 priority customer support",
+        "Premium exclusive offers & special deals",
+        "Fastest booking with top priority",
+        "Maximum reward points (3x)",
+        "Complete warranty assistance (claim support & follow-up)"
+      ]),
+      "ACTIVE",
+      "CUSTOMER",
+      0,
+      3490,
+      3,
+      "Choose Customer Premium",
+      now,
+      now
+    );
 
     // 6. Subscriptions
     const subsCount = this.db.prepare("SELECT COUNT(*) as count FROM subscriptions").get() as { count: number };
@@ -2214,14 +2577,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       `);
 
       const sampleSubs = [
-        { id: "sub_101", name: "Amravati Grand Restaurant", email: "amravati@hello-hi.in", phone: "+91 98480 11001", planId: "plan_growth", planName: "Growth Merchant Pro", status: "ACTIVE", amount: 7999, start: "2026-10-01T00:00:00.000Z", end: "2026-11-01T00:00:00.000Z", auto: 1, payStatus: "PAID" },
-        { id: "sub_102", name: "Srinivasa Packers & Movers", email: "srinivasa.packers@hello-hi.in", phone: "+91 98480 11002", planId: "plan_starter", planName: "Hyperlocal Starter", status: "ACTIVE", amount: 2999, start: "2026-10-15T00:00:00.000Z", end: "2026-11-15T00:00:00.000Z", auto: 1, payStatus: "PAID" },
-        { id: "sub_103", name: "Siri Dental Clinic", email: "siri.dental@hello-hi.in", phone: "+91 98480 11003", planId: "plan_enterprise", planName: "Enterprise Multi-Outlet", status: "ACTIVE", amount: 18999, start: "2026-09-01T00:00:00.000Z", end: "2026-12-01T00:00:00.000Z", auto: 1, payStatus: "PAID" },
-        { id: "sub_104", name: "Fernat Dental Business", email: "fernat.business@hello-hi.in", phone: "+91 98480 11004", planId: "plan_growth", planName: "Growth Merchant Pro", status: "PENDING", amount: 7999, start: "2026-10-28T00:00:00.000Z", end: "2026-11-28T00:00:00.000Z", auto: 0, payStatus: "PENDING" },
-        { id: "sub_105", name: "Sri Balaji Pure Ghee Sweets", email: "balaji.sweets@hello-hi.in", phone: "+91 98480 11005", planId: "plan_starter", planName: "Hyperlocal Starter", status: "EXPIRED", amount: 2999, start: "2026-08-01T00:00:00.000Z", end: "2026-09-01T00:00:00.000Z", auto: 0, payStatus: "PAID" },
-        { id: "sub_106", name: "Royal Enfield Care Hub", email: "re.care@hello-hi.in", phone: "+91 98480 11006", planId: "plan_growth", planName: "Growth Merchant Pro", status: "ACTIVE", amount: 7999, start: "2026-10-10T00:00:00.000Z", end: "2026-11-10T00:00:00.000Z", auto: 1, payStatus: "PAID" },
-        { id: "sub_107", name: "Vijayawada Marble & Granites", email: "vja.marble@hello-hi.in", phone: "+91 98480 11007", planId: "plan_starter", planName: "Hyperlocal Starter", status: "CANCELLED", amount: 2999, start: "2026-07-01T00:00:00.000Z", end: "2026-08-01T00:00:00.000Z", auto: 0, payStatus: "PAID" },
-        { id: "sub_108", name: "Kasturi Ayurvedic Wellness", email: "kasturi.ayur@hello-hi.in", phone: "+91 98480 11008", planId: "plan_enterprise", planName: "Enterprise Multi-Outlet", status: "ACTIVE", amount: 18999, start: "2026-10-05T00:00:00.000Z", end: "2027-01-05T00:00:00.000Z", auto: 1, payStatus: "PAID" }
+        { id: "sub_101", name: "Amravati Grand Restaurant", email: "amravati@hello-hi.in", phone: "+91 98480 11001", planId: "plan_biz_growth", planName: "Growth Plan", status: "ACTIVE", amount: 799, start: "2026-10-01T00:00:00.000Z", end: "2026-11-01T00:00:00.000Z", auto: 1, payStatus: "PAID" },
+        { id: "sub_102", name: "Srinivasa Packers & Movers", email: "srinivasa.packers@hello-hi.in", phone: "+91 98480 11002", planId: "plan_biz_free", planName: "Free Listing", status: "ACTIVE", amount: 0, start: "2026-10-15T00:00:00.000Z", end: "2026-11-15T00:00:00.000Z", auto: 1, payStatus: "PAID" },
+        { id: "sub_103", name: "Siri Dental Clinic", email: "siri.dental@hello-hi.in", phone: "+91 98480 11003", planId: "plan_biz_pro", planName: "Business Pro", status: "ACTIVE", amount: 1799, start: "2026-09-01T00:00:00.000Z", end: "2026-12-01T00:00:00.000Z", auto: 1, payStatus: "PAID" },
+        { id: "sub_104", name: "Fernat Dental Business", email: "fernat.business@hello-hi.in", phone: "+91 98480 11004", planId: "plan_biz_growth", planName: "Growth Plan", status: "PENDING", amount: 799, start: "2026-10-28T00:00:00.000Z", end: "2026-11-28T00:00:00.000Z", auto: 0, payStatus: "PENDING" },
+        { id: "sub_105", name: "Sri Balaji Pure Ghee Sweets", email: "balaji.sweets@hello-hi.in", phone: "+91 98480 11005", planId: "plan_biz_free", planName: "Free Listing", status: "EXPIRED", amount: 0, start: "2026-08-01T00:00:00.000Z", end: "2026-09-01T00:00:00.000Z", auto: 0, payStatus: "PAID" },
+        { id: "sub_106", name: "Royal Enfield Care Hub", email: "re.care@hello-hi.in", phone: "+91 98480 11006", planId: "plan_biz_growth", planName: "Growth Plan", status: "ACTIVE", amount: 799, start: "2026-10-10T00:00:00.000Z", end: "2026-11-10T00:00:00.000Z", auto: 1, payStatus: "PAID" },
+        { id: "sub_107", name: "Vijayawada Marble & Granites", email: "vja.marble@hello-hi.in", phone: "+91 98480 11007", planId: "plan_biz_free", planName: "Free Listing", status: "CANCELLED", amount: 0, start: "2026-07-01T00:00:00.000Z", end: "2026-08-01T00:00:00.000Z", auto: 0, payStatus: "PAID" },
+        { id: "sub_108", name: "Kasturi Ayurvedic Wellness", email: "kasturi.ayur@hello-hi.in", phone: "+91 98480 11008", planId: "plan_biz_pro", planName: "Business Pro", status: "ACTIVE", amount: 1799, start: "2026-10-05T00:00:00.000Z", end: "2027-01-05T00:00:00.000Z", auto: 1, payStatus: "PAID" }
       ];
 
       for (const s of sampleSubs) {
@@ -2546,6 +2909,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    // Push Templates Ensure Seeding
+    try {
+      this.db.exec(`
+        INSERT OR IGNORE INTO push_templates (id, event_type, name, title_template, body_template, destination_url, status, created_at, updated_at) VALUES
+        ('tmpl_1', 'REFERRAL_REWARD_GRANTED', 'Referral Reward Credited', 'Congratulations! You earned ₹{{reward_amount}}', 'Your referral {{referee_name}} joined Hello! Bonus credited to your wallet.', 'wallet', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_2', 'BUSINESS_LISTING_APPROVED', 'Business Listing Approved', 'Your business {{business_name}} is now live!', 'Customers in {{city}} can now find your services and place enquiries directly.', 'business/profile', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_3', 'NEW_ENQUIRY_RECEIVED', 'New Customer Enquiry', 'New enquiry for {{service_name}}!', 'A customer in {{locality}} requested a callback. Open enquiry to respond.', 'enquiries', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_4', 'BUSINESS_VERIFICATION_COMPLETED', 'KYC Verification Completed', 'Your documents have been verified!', 'Your verified badge is now active on your store listing.', 'business/kyc', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_5', 'ACCOUNT_STATUS_CHANGED', 'Account Security Alert', 'Security status update for your account', 'Your account settings were updated on {{timestamp}} from {{device}}.', 'profile/security', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_wlt_cr', 'WALLET_CREDITED', 'Wallet Credited Successfully', 'Wallet Credited: ₹{{amount}}', '₹{{amount}} has been credited to your HELLO-Hi {{wallet_type}} wallet. Transaction reference: {{transaction_reference}}. Available balance: ₹{{available_balance}}.', 'wallet', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_wlt_db', 'WALLET_DEBITED', 'Wallet Debited', 'Wallet Debited: ₹{{amount}}', '₹{{amount}} has been debited from your HELLO-Hi {{wallet_type}} wallet. Transaction reference: {{transaction_reference}}. Available balance: ₹{{available_balance}}.', 'wallet', 'ACTIVE', datetime('now'), datetime('now'));
+      `);
+    } catch {}
+
     // 8. Notifications
     const notifCount = this.db.prepare("SELECT COUNT(*) as count FROM notifications").get() as { count: number };
     if (notifCount.count === 0) {
@@ -2562,7 +2939,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         ('tmpl_2', 'BUSINESS_LISTING_APPROVED', 'Business Listing Approved', 'Your business {{business_name}} is now live!', 'Customers in {{city}} can now find your services and place enquiries directly.', 'business/profile', 'ACTIVE', datetime('now'), datetime('now')),
         ('tmpl_3', 'NEW_ENQUIRY_RECEIVED', 'New Customer Enquiry', 'New enquiry for {{service_name}}!', 'A customer in {{locality}} requested a callback. Open enquiry to respond.', 'enquiries', 'ACTIVE', datetime('now'), datetime('now')),
         ('tmpl_4', 'BUSINESS_VERIFICATION_COMPLETED', 'KYC Verification Completed', 'Your documents have been verified!', 'Your verified badge is now active on your store listing.', 'business/kyc', 'ACTIVE', datetime('now'), datetime('now')),
-        ('tmpl_5', 'ACCOUNT_STATUS_CHANGED', 'Account Security Alert', 'Security status update for your account', 'Your account settings were updated on {{timestamp}} from {{device}}.', 'profile/security', 'ACTIVE', datetime('now'), datetime('now'));
+        ('tmpl_5', 'ACCOUNT_STATUS_CHANGED', 'Account Security Alert', 'Security status update for your account', 'Your account settings were updated on {{timestamp}} from {{device}}.', 'profile/security', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_wlt_cr', 'WALLET_CREDITED', 'Wallet Credited Successfully', 'Wallet Credited: ₹{{amount}}', '₹{{amount}} has been credited to your HELLO-Hi {{wallet_type}} wallet. Transaction reference: {{transaction_reference}}. Available balance: ₹{{available_balance}}.', 'wallet', 'ACTIVE', datetime('now'), datetime('now')),
+        ('tmpl_wlt_db', 'WALLET_DEBITED', 'Wallet Debited', 'Wallet Debited: ₹{{amount}}', '₹{{amount}} has been debited from your HELLO-Hi {{wallet_type}} wallet. Transaction reference: {{transaction_reference}}. Available balance: ₹{{available_balance}}.', 'wallet', 'ACTIVE', datetime('now'), datetime('now'));
       INSERT OR IGNORE INTO normal_push_logs (id, notification_ref, event_type, recipient_type, recipient_id, recipient_phone, title, message, destination_url, delivery_status, created_at, sent_at) VALUES
       ('npl_1', 'PUSH-TXN-98210', 'NEW_ENQUIRY_RECEIVED', 'BUSINESS', 'biz-amravati', '+919848011111', 'New Customer Enquiry for Amravati Grand Restaurant!', 'A customer in your service area requested a callback. Open enquiry to respond.', 'enquiries', 'DELIVERED', datetime('now', '-1 hours'), datetime('now', '-1 hours')),
       ('npl_2', 'PUSH-TXN-98211', 'BUSINESS_LISTING_APPROVED', 'MERCHANT', 'biz-siri-dental', '+919848022222', 'Your business Siri Dental Clinic is now live!', 'Customers in Vijayawada can now find your services and place enquiries directly.', 'business/profile', 'DELIVERED', datetime('now', '-3 hours'), datetime('now', '-3 hours')),
@@ -2619,6 +2998,283 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       insertWdl.run("wdl-102", "biz-sai-medicals", "Sai Medical & General Stores", 4200, "SBI0004921 - 20391829481", "SBI0004921", "PENDING", null, nowIso, null);
       insertWdl.run("wdl-103", "biz-apex-rentals", "Apex Self-Drive Cars", 15000, "ICIC0000832 - 10928374619", "ICIC0000832", "PROCESSING", "PAYOUT-ICICI-1102", nowIso, null);
     }
+
+    // 11. Help Center Categories, Articles & Support Channels Seeding
+    try {
+      const catCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM help_categories");
+      if (!catCount || catCount.c === 0) {
+        const insertHcat = this.db.prepare(`
+          INSERT OR IGNORE INTO help_categories (id, title, subtitle, slug, icon, audience, display_order, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        // Customer Help Categories (Exact 8 items from approved mockups)
+        insertHcat.run("hcat-cust-1", "Account & Profile", "Login, profile, KYC & account settings", "account-profile", "User", "CUSTOMER", 1, "PUBLISHED", now, now);
+        insertHcat.run("hcat-cust-2", "Booking & Service Enquiries", "Book a service, track requests & get updates", "booking-enquiries", "Calendar", "CUSTOMER", 2, "PUBLISHED", now, now);
+        insertHcat.run("hcat-cust-3", "Payments & Wallet", "Add money, payment issues, refunds & invoices", "payments-wallet", "Wallet", "CUSTOMER", 3, "PUBLISHED", now, now);
+        insertHcat.run("hcat-cust-4", "Plans & Subscriptions", "View, purchase, renew and manage plans", "plans-subscriptions", "Layers", "CUSTOMER", 4, "PUBLISHED", now, now);
+        insertHcat.run("hcat-cust-5", "Offers & Coupons", "Find, apply and get help with offers & discounts", "offers-coupons", "Tag", "CUSTOMER", 5, "PUBLISHED", now, now);
+        insertHcat.run("hcat-cust-6", "Cancellations & Refunds", "Cancel bookings, refund status & policies", "cancellations-refunds", "RefreshCw", "CUSTOMER", 6, "PUBLISHED", now, now);
+        insertHcat.run("hcat-cust-7", "App & Website Support", "Using the app, website access & common issues", "app-website-support", "Smartphone", "CUSTOMER", 7, "PUBLISHED", now, now);
+        insertHcat.run("hcat-cust-8", "Safety & Policies", "Privacy, terms, safety guidelines & data security", "safety-policies", "Shield", "CUSTOMER", 8, "PUBLISHED", now, now);
+
+        // Business Partner Help Categories (Exact 8 items from approved mockups)
+        insertHcat.run("hcat-part-1", "Business Registration & Verification", "Register your business, complete KYC, and get verified", "business-registration-verification", "BadgeCheck", "BUSINESS_PARTNER", 1, "PUBLISHED", now, now);
+        insertHcat.run("hcat-part-2", "Listing & Profile Management", "Add, update, and manage your business listing", "listing-profile-management", "Store", "BUSINESS_PARTNER", 2, "PUBLISHED", now, now);
+        insertHcat.run("hcat-part-3", "Enquiries & Leads", "Receive, track, and manage customer enquiries", "enquiries-leads", "Users", "BUSINESS_PARTNER", 3, "PUBLISHED", now, now);
+        insertHcat.run("hcat-part-4", "Plans & Subscriptions", "View, purchase, renew, and upgrade your plan", "partner-plans-subscriptions", "Layers", "BUSINESS_PARTNER", 4, "PUBLISHED", now, now);
+        insertHcat.run("hcat-part-5", "Wallet & Settlements", "Check earnings, transaction history, and settle payments", "wallet-settlements", "Wallet", "BUSINESS_PARTNER", 5, "PUBLISHED", now, now);
+        insertHcat.run("hcat-part-6", "Advertisements & Offers", "Promote your business with ads, campaigns, and coupons", "advertisements-offers", "Megaphone", "BUSINESS_PARTNER", 6, "PUBLISHED", now, now);
+        insertHcat.run("hcat-part-7", "Performance & Reports", "Track leads, bookings, views, and business growth", "performance-reports", "BarChart3", "BUSINESS_PARTNER", 7, "PUBLISHED", now, now);
+        insertHcat.run("hcat-part-8", "Team & Access Management", "Add staff, manage roles, and control access", "team-access-management", "UserCheck", "BUSINESS_PARTNER", 8, "PUBLISHED", now, now);
+      }
+
+      const artCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM help_articles");
+      if (!artCount || artCount.c === 0) {
+        const insertHart = this.db.prepare(`
+          INSERT OR IGNORE INTO help_articles (id, category_id, title, slug, summary, content, audience, search_keywords, is_popular, views_count, helpful_count, not_helpful_count, status, display_order, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        // Customer Articles
+        insertHart.run(
+          "hart-cust-1", "hcat-cust-1", "How to create a HELLO-Hi account?", "how-to-create-hello-hi-account",
+          "Step-by-step guide on creating and verifying your account on HELLO-Hi using mobile OTP.",
+          "<h2>Creating your HELLO-Hi Account</h2><p>Getting started with HELLO-Hi is fast and secure. Follow these steps:</p><ol><li>Click on <strong>Register</strong> in the top header.</li><li>Select your account type (Customer or Business Partner).</li><li>Enter your 10-digit mobile phone number and mandatory email address.</li><li>Enter the 6-digit verification OTP received via SMS.</li><li>Fill in your basic profile details and set your default city hub.</li></ol><p>Once registered, you can immediately browse local businesses, book services, and manage bookings from your personal dashboard.</p>",
+          "CUSTOMER", "account, register, signup, login, otp, profile", 1, 1420, 89, 2, "PUBLISHED", 1, now, now
+        );
+
+        insertHart.run(
+          "hart-cust-2", "hcat-cust-2", "How to book a service on HELLO-Hi?", "how-to-book-service-hello-hi",
+          "Find local service providers, view pricing, and submit instant booking enquiries.",
+          "<h2>Booking a Service on HELLO-Hi</h2><p>HELLO-Hi connects you with verified local businesses instantly.</p><ol><li>Use the global search bar to search for the service you need (e.g. AC Repair, Catering, Salon).</li><li>Filter results by city, locality, verified status, and customer ratings.</li><li>Select a verified business listing to view services, photos, and reviews.</li><li>Click <strong>Book Now</strong> or <strong>Send Enquiry</strong> to submit your requirements.</li><li>The vendor will contact you promptly via call or WhatsApp with pricing and schedule.</li></ol>",
+          "CUSTOMER", "book, service, enquiry, appointment, schedule", 1, 1280, 74, 3, "PUBLISHED", 2, now, now
+        );
+
+        insertHart.run(
+          "hart-cust-3", "hcat-cust-2", "How to track my booking status?", "how-to-track-booking-status",
+          "Learn how to view dispatched quotes, merchant responses, and live appointment statuses in your dashboard.",
+          "<h2>Tracking Your Bookings & Enquiries</h2><p>You can monitor all dispatched enquiries directly from your Customer Dashboard:</p><ol><li>Log in and open <strong>My Dashboard</strong> from your profile avatar.</li><li>Navigate to the <strong>My Enquiries</strong> tab.</li><li>Review the live status badge (Pending, Confirmed, Completed, or Cancelled).</li><li>Click on any enquiry to view vendor contact numbers, dispatched quotes, and chat notes.</li></ol>",
+          "CUSTOMER", "track, booking, status, enquiry, history", 1, 980, 56, 1, "PUBLISHED", 3, now, now
+        );
+
+        insertHart.run(
+          "hart-cust-4", "hcat-cust-3", "How to make a payment and add money to wallet?", "how-to-make-payment-add-money-wallet",
+          "Explore online payment methods via UPI, credit/debit card, and quick wallet top-ups.",
+          "<h2>Payments and Wallet Guide</h2><p>HELLO-Hi supports 100% secure online transactions powered by RBI-authorized payment gateways.</p><h3>Adding Money to Wallet</h3><ol><li>Go to <strong>My Wallet</strong> in your account navigation.</li><li>Enter the amount you wish to add (minimum ₹100).</li><li>Choose your preferred payment method: UPI (Google Pay, PhonePe, Paytm), Net Banking, or Cards.</li><li>Complete the transaction. Your wallet balance updates immediately.</li></ol><p>Wallet balance can be used for instant checkouts with zero transaction fees.</p>",
+          "CUSTOMER", "payment, wallet, upi, add money, refund, card", 1, 1150, 68, 2, "PUBLISHED", 4, now, now
+        );
+
+        insertHart.run(
+          "hart-cust-5", "hcat-cust-6", "How to cancel a booking and get a refund?", "how-to-cancel-booking-get-refund",
+          "Check our cancellation timeline and instant refund resolution policies.",
+          "<h2>Cancellation & Refund Policy</h2><p>We believe in transparent and fair service cancellations:</p><ol><li>Open <strong>My Enquiries</strong> and locate your booking.</li><li>Click <strong>Cancel Booking</strong> before the service provider arrives or confirms the job.</li><li>Select the cancellation reason from the dropdown.</li><li>If any prepaid advance or booking token was paid, refunds are credited back to your HELLO-Hi Wallet instantly or your original bank source within 3-5 business days.</li></ol>",
+          "CUSTOMER", "cancel, refund, money back, policy, dispute", 1, 1020, 62, 4, "PUBLISHED", 5, now, now
+        );
+
+        insertHart.run(
+          "hart-cust-6", "hcat-cust-1", "How to update my profile and contact details?", "how-to-update-profile-contact-details",
+          "Manage your primary phone number, email address, and delivery location.",
+          "<h2>Updating Profile & Contact Information</h2><p>Keep your profile current to receive timely service notifications:</p><ol><li>Click your profile avatar and select <strong>My Profile</strong>.</li><li>Update your Full Name, Email Address, and Preferred Language.</li><li>Add your primary residence locality and landmark for faster service routing.</li><li>Save changes. Updates reflect across the platform immediately.</li></ol>",
+          "CUSTOMER", "profile, update, phone, email, settings", 1, 840, 49, 1, "PUBLISHED", 6, now, now
+        );
+
+        // Business Partner Articles
+        insertHart.run(
+          "hart-part-1", "hcat-part-1", "How to become a Business Partner?", "how-to-become-business-partner",
+          "Complete partner onboarding, upload shop proof, and activate your vendor suite.",
+          "<h2>Becoming a HELLO-Hi Business Partner</h2><p>Grow your business with thousands of verified local customers every day.</p><ol><li>Click <strong>Become Business Partner</strong> in the website header.</li><li>Register with your business mobile number and mandatory business email.</li><li>Provide your trade name, legal entity structure, category, and physical address.</li><li>Upload proof of business (GSTIN, Trade License, FSSAI, or Shop Act Registration).</li><li>Our verification team reviews submissions within 24 business hours. Once verified, your storefront goes live!</li></ol>",
+          "BUSINESS_PARTNER", "partner, onboarding, register, business, merchant, kyc", 1, 2150, 142, 5, "PUBLISHED", 1, now, now
+        );
+
+        insertHart.run(
+          "hart-part-2", "hcat-part-1", "How to register and verify my business on HELLO-Hi?", "how-to-register-verify-business-hello-hi",
+          "Learn about required KYC documentation, GST verification, and quick approval SLAs.",
+          "<h2>Business KYC and Verification Requirements</h2><p>Verified businesses receive up to 5x higher customer trust and lead inquiries.</p><h3>Required Documents</h3><ul><li><strong>Identity Proof:</strong> Owner Aadhaar or PAN card.</li><li><strong>Business Proof:</strong> GST Certificate, Udyam Registration, or Municipal Trade License.</li><li><strong>Address Proof:</strong> Recent commercial electricity bill or rental agreement.</li></ul><p>Upload clear color scans in your <strong>Partner Portal &gt; KYC Documents</strong> section.</p>",
+          "BUSINESS_PARTNER", "kyc, verify, approval, documents, gst, pan", 1, 1890, 118, 3, "PUBLISHED", 2, now, now
+        );
+
+        insertHart.run(
+          "hart-part-3", "hcat-part-2", "How to add or update my business listing?", "how-to-add-manage-business-listing",
+          "Update business timings, address, catalog offerings, cover photos, and gallery images.",
+          "<h2>Managing Your Business Listing</h2><p>A complete profile attracts more high-value inquiries.</p><ol><li>Access the <strong>Business Partner Center</strong> and click <strong>Profile</strong>.</li><li>Update business operating hours, weekly offs, and emergency 24/7 service toggles.</li><li>Upload high-resolution storefront photos, interior images, and product catalogs.</li><li>List specific services, pricing estimates, and customer warranties.</li><li>Click <strong>Save &amp; Publish</strong> to update your live marketplace listing.</li></ol>",
+          "BUSINESS_PARTNER", "listing, storefront, edit, photos, hours, address", 1, 1640, 95, 2, "PUBLISHED", 3, now, now
+        );
+
+        insertHart.run(
+          "hart-part-4", "hcat-part-3", "How to receive and manage leads?", "how-to-receive-manage-leads",
+          "Receive real-time push and SMS lead alerts, respond to customers, and track conversion rates.",
+          "<h2>Managing Customer Leads &amp; Enquiries</h2><p>Instant response times lead to a 70% higher deal closure rate.</p><ol><li>Whenever a customer submits an enquiry in your category and locality, you receive an instant push notification and SMS alert.</li><li>Open the <strong>Enquiries &amp; Leads</strong> tab in your Business Partner Center.</li><li>Review the customer's requirement, budget, and contact info.</li><li>Call or message the customer directly via the integrated WhatsApp shortcut.</li><li>Mark the lead status as Contacted, Quoted, or Closed to track conversion metrics.</li></ol>",
+          "BUSINESS_PARTNER", "leads, enquiries, customers, quote, call, conversion", 1, 1720, 104, 3, "PUBLISHED", 4, now, now
+        );
+
+        insertHart.run(
+          "hart-part-5", "hcat-part-4", "How to purchase or renew a subscription plan?", "how-to-purchase-renew-subscription-plan",
+          "Compare Growth, Professional, and Enterprise plans with flexible wallet or online checkout.",
+          "<h2>Partner Subscription Plans &amp; Benefits</h2><p>Choose the tier that matches your business scale:</p><ul><li><strong>Growth Merchant Pro:</strong> Ideal for single-location stores seeking steady local inquiries.</li><li><strong>Business Pro:</strong> Enhanced ranking boost, priority lead routing, and verified trust badge.</li><li><strong>Enterprise Multi-Outlet:</strong> Dedicated account manager, multi-branch management, and top pinned placements.</li></ul><p>Renew anytime using your accumulated Wallet balance or online UPI/Cards.</p>",
+          "BUSINESS_PARTNER", "subscription, plan, renew, pricing, growth, pro", 1, 1510, 89, 4, "PUBLISHED", 5, now, now
+        );
+
+        insertHart.run(
+          "hart-part-6", "hcat-part-8", "How to add team members and manage access?", "how-to-add-team-members-manage-access",
+          "Assign staff roles, invite operators, and control permissions across branches.",
+          "<h2>Team Management &amp; Role Permissions</h2><p>Empower your staff to respond to customer inquiries while protecting sensitive financial records:</p><ol><li>Navigate to <strong>Team &amp; Access Management</strong> in your partner suite.</li><li>Click <strong>Add Team Member</strong> and enter their name and mobile number.</li><li>Assign a role: <em>Manager</em> (lead response + listing edits) or <em>Operator</em> (lead response only).</li><li>Staff members log in using their own phone OTP and access assigned business leads.</li></ol>",
+          "BUSINESS_PARTNER", "team, staff, access, permissions, manager, roles", 1, 1340, 77, 2, "PUBLISHED", 6, now, now
+        );
+      }
+
+      const chanCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM support_channels");
+      if (!chanCount || chanCount.c === 0) {
+        const insertChan = this.db.prepare(`
+          INSERT OR IGNORE INTO support_channels (id, channel_type, label, value, audience, is_active, display_order, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+        `);
+
+        insertChan.run("chan-call-all", "CALL", "Call Us", "+91 80 4710 0727", "GENERAL", 1, now, now);
+        insertChan.run("chan-wa-all", "WHATSAPP", "Chat on WhatsApp", "+91 80 4710 0727", "GENERAL", 2, now, now);
+        insertChan.run("chan-mail-cust", "EMAIL", "Email Support", "support@hello-hi.in", "CUSTOMER", 3, now, now);
+        insertChan.run("chan-mail-part", "EMAIL", "Email Support", "partner@hello-hi.in", "BUSINESS_PARTNER", 4, now, now);
+        insertChan.run("chan-ticket-all", "TICKET", "Raise a Support Ticket", "/support/tickets/new", "GENERAL", 5, now, now);
+      }
+
+      // Seed Support Departments
+      const deptCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM support_departments");
+      if (!deptCount || deptCount.c === 0) {
+        const insertDept = this.db.prepare(`
+          INSERT OR IGNORE INTO support_departments (id, name, description, is_active, created_at)
+          VALUES (?, ?, ?, 1, ?)
+        `);
+        insertDept.run("dept-cust", "Customer Support", "Inquiries, booking assistance, and general customer help", now);
+        insertDept.run("dept-part", "Partner Relations", "Merchant onboarding, listing optimization, and lead assistance", now);
+        insertDept.run("dept-bill", "Payments & Wallet", "Settlements, wallet balances, transaction disputes, and refunds", now);
+        insertDept.run("dept-kyc", "KYC & Verification", "Business verification, document audits, and merchant compliance", now);
+        insertDept.run("dept-tech", "Technical Support", "Bug reports, mobile app issues, and login troubleshooting", now);
+      }
+
+      // Seed Canned Responses
+      const cannedCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM support_canned_responses");
+      if (!cannedCount || cannedCount.c === 0) {
+        const insertCanned = this.db.prepare(`
+          INSERT OR IGNORE INTO support_canned_responses (id, title, category, audience, body_text, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        `);
+        insertCanned.run(
+          "can-1", "Standard Welcome & Investigation", "General", "ALL",
+          "Hello {{user_name}},\n\nThank you for reaching out to HELLO-Hi Support. We have received your query regarding \"{{ticket_subject}}\" and our specialist team has commenced investigation. We will update you shortly.",
+          now, now
+        );
+        insertCanned.run(
+          "can-2", "KYC Verification Follow-up", "Verification", "BUSINESS_PARTNER",
+          "Hello {{user_name}},\n\nYour business document verification is currently undergoing review with our Compliance Team. Document verification typically completes within 24 business hours.",
+          now, now
+        );
+        insertCanned.run(
+          "can-3", "Wallet Settlement Confirmation", "Payments", "BUSINESS_PARTNER",
+          "Hello {{user_name}},\n\nYour settlement request has been processed. The funds are expected to reflect in your registered bank account within 24 to 48 banking hours.",
+          now, now
+        );
+        insertCanned.run(
+          "can-4", "Resolution Confirmation & Closure", "General", "ALL",
+          "Hello {{user_name}},\n\nWe are pleased to inform you that your issue has been resolved. Please review the details in your ticket timeline. If you require further assistance, you may reply directly to this ticket.",
+          now, now
+        );
+      }
+    } catch (e) {
+      console.error("Error seeding Help Center schema:", e);
+    }
+
+    // Seed Active Promotional Coupons if empty
+    try {
+      const cpnCount = this.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM coupons");
+      if (!cpnCount || cpnCount.c === 0) {
+        const insertCpn = this.db.prepare(`
+          INSERT OR IGNORE INTO coupons (
+            id, code, title, description, terms, banner_url, category,
+            discount_type, discount_value, min_order_value, max_discount,
+            usage_limit, per_user_limit, redemption_count,
+            applicable_city, applicable_category, valid_from, valid_until,
+            status, created_by, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        insertCpn.run(
+          "cpn-diwali-50",
+          "FESTIVAL50",
+          "Diwali & Festive Mega Deal",
+          "Get flat 50% discount on first verified service booking or restaurant dining",
+          "Valid on orders above ₹499. Maximum discount capped at ₹250. One time use per user.",
+          "https://images.unsplash.com/photo-1514565131-fce0801e5785?w=800&auto=format&fit=crop&q=80",
+          "Festival",
+          "PERCENTAGE",
+          50,
+          499,
+          250,
+          5000,
+          1,
+          0,
+          "All",
+          "All",
+          now,
+          "2027-12-31T23:59:59.000Z",
+          "ACTIVE",
+          "Super Admin",
+          now,
+          now
+        );
+
+        insertCpn.run(
+          "cpn-welcome-100",
+          "WELCOME100",
+          "New User Welcome Cashback",
+          "Flat ₹100 instant discount on any salon, doctor appointment, or home service",
+          "Valid for newly registered users on minimum spend of ₹299.",
+          "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=800&auto=format&fit=crop&q=80",
+          "Welcome",
+          "FLAT",
+          100,
+          299,
+          100,
+          10000,
+          1,
+          0,
+          "All",
+          "All",
+          now,
+          "2027-12-31T23:59:59.000Z",
+          "ACTIVE",
+          "Super Admin",
+          now,
+          now
+        );
+
+        insertCpn.run(
+          "cpn-food-30",
+          "FOODIE30",
+          "Restaurant & Biryani Special",
+          "Flat 30% OFF at top rated verified restaurants and cafes across Hyderabad & AP",
+          "Maximum discount ₹150. Valid on dine-in bookings and table reservations.",
+          "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800&auto=format&fit=crop&q=80",
+          "Food & Dining",
+          "PERCENTAGE",
+          30,
+          350,
+          150,
+          5000,
+          2,
+          0,
+          "All",
+          "restaurants",
+          now,
+          "2027-12-31T23:59:59.000Z",
+          "ACTIVE",
+          "Super Admin",
+          now,
+          now
+        );
+      }
+    } catch (e) {
+      console.error("Error seeding Coupons schema:", e);
+    }
   }
 
   public query<T = any>(sql: string, params: any[] = []): T[] {
@@ -2674,5 +3330,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   public getMySQLPool(): mysql.Pool | null {
     return this.mysqlPool;
+  }
+
+  public getRawDb(): any {
+    return this.db;
+  }
+
+  public transaction<T>(fn: () => T): T {
+    this.db.inTransaction = true;
+    this.execute("BEGIN IMMEDIATE TRANSACTION;");
+    try {
+      const res = fn();
+      this.execute("COMMIT;");
+      this.db.inTransaction = false;
+      this.db.persist();
+      return res;
+    } catch (err) {
+      try {
+        this.execute("ROLLBACK;");
+      } catch {}
+      this.db.inTransaction = false;
+      throw err;
+    }
   }
 }

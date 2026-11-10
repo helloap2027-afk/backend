@@ -4,6 +4,7 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as express from "express";
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -18,7 +19,6 @@ async function bootstrap() {
   expressApp.set("etag", false);
 
   // Allow up to 50MB for image / document base64 uploads
-  const express = require("express");
   expressApp.use(express.json({ limit: "50mb" }));
   expressApp.use(express.urlencoded({ limit: "50mb", extended: true }));
 
@@ -65,7 +65,11 @@ async function bootstrap() {
       "x-admin-user",
       "x-admin-role",
       "X-Admin-User",
-      "X-Admin-Role"
+      "X-Admin-Role",
+      "x-user-role",
+      "X-User-Role",
+      "x-active-role",
+      "X-Active-Role"
     ]
   });
 

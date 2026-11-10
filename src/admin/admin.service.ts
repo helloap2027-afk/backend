@@ -855,12 +855,17 @@ export class AdminService {
     const billing_interval = payload.billing_interval || "MONTHLY";
     const features = Array.isArray(payload.features) ? JSON.stringify(payload.features) : (payload.features || "[]");
     const status = payload.status || "ACTIVE";
+    const audience = payload.audience || "BUSINESS";
+    const is_popular = payload.is_popular ? 1 : 0;
+    const annual_price = payload.annual_price !== undefined ? Number(payload.annual_price) : null;
+    const display_order = payload.display_order !== undefined ? Number(payload.display_order) : 1;
+    const button_text = payload.button_text || null;
     const now = new Date().toISOString();
 
     this.db.execute(`
-      INSERT INTO subscription_plans (id, name, description, price, currency, billing_interval, features, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [id, name, description, price, currency, billing_interval, features, status, now, now]);
+      INSERT INTO subscription_plans (id, name, description, price, currency, billing_interval, features, status, audience, is_popular, annual_price, display_order, button_text, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [id, name, description, price, currency, billing_interval, features, status, audience, is_popular, annual_price, display_order, button_text, now, now]);
 
     const auditId = `audit-${Date.now()}`;
     try {
@@ -873,7 +878,7 @@ export class AdminService {
     return {
       success: true,
       message: `Plan '${name}' created successfully.`,
-      data: { id, name, description, price, currency, billing_interval, features: typeof features === "string" ? JSON.parse(features) : features, status }
+      data: { id, name, description, price, currency, billing_interval, features: typeof features === "string" ? JSON.parse(features) : features, status, audience, is_popular, annual_price, display_order, button_text }
     };
   }
 
@@ -892,13 +897,19 @@ export class AdminService {
       ? (Array.isArray(payload.features) ? JSON.stringify(payload.features) : payload.features)
       : existing.features;
     const status = payload.status !== undefined ? payload.status : existing.status;
+    const audience = payload.audience !== undefined ? payload.audience : (existing.audience || "BUSINESS");
+    const is_popular = payload.is_popular !== undefined ? (payload.is_popular ? 1 : 0) : (existing.is_popular || 0);
+    const annual_price = payload.annual_price !== undefined ? Number(payload.annual_price) : existing.annual_price;
+    const display_order = payload.display_order !== undefined ? Number(payload.display_order) : (existing.display_order || 1);
+    const button_text = payload.button_text !== undefined ? payload.button_text : existing.button_text;
     const now = new Date().toISOString();
 
     this.db.execute(`
       UPDATE subscription_plans
-      SET name = ?, description = ?, price = ?, currency = ?, billing_interval = ?, features = ?, status = ?, updated_at = ?
+      SET name = ?, description = ?, price = ?, currency = ?, billing_interval = ?, features = ?, status = ?,
+          audience = ?, is_popular = ?, annual_price = ?, display_order = ?, button_text = ?, updated_at = ?
       WHERE id = ?
-    `, [name, description, price, currency, billing_interval, features, status, now, id]);
+    `, [name, description, price, currency, billing_interval, features, status, audience, is_popular, annual_price, display_order, button_text, now, id]);
 
     const auditId = `audit-${Date.now()}`;
     try {
@@ -911,7 +922,7 @@ export class AdminService {
     return {
       success: true,
       message: `Plan '${name}' updated successfully.`,
-      data: { id, name, description, price, currency, billing_interval, features: typeof features === "string" ? JSON.parse(features) : features, status }
+      data: { id, name, description, price, currency, billing_interval, features: typeof features === "string" ? JSON.parse(features) : features, status, audience, is_popular, annual_price, display_order, button_text }
     };
   }
 

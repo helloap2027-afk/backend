@@ -10,6 +10,9 @@ import { ReviewsModule } from "./reviews/reviews.module";
 import { AdminModule } from "./admin/admin.module";
 import { CmsModule } from "./cms/cms.module";
 import { NotificationsModule } from "./notifications/notifications.module";
+import { WalletModule } from "./wallet/wallet.module";
+import { PlansModule } from "./plans/plans.module";
+import { HelpCenterModule } from "./help-center/help-center.module";
 import { HealthController } from "./health/health.controller";
 
 @Module({
@@ -25,6 +28,9 @@ import { HealthController } from "./health/health.controller";
     AdminModule,
     CmsModule,
     NotificationsModule,
+    WalletModule,
+    PlansModule,
+    HelpCenterModule,
   ],
   controllers: [HealthController],
   providers: [],

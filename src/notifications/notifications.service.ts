@@ -205,11 +205,11 @@ export class NotificationsService implements OnModuleInit {
     // Role filtering (Customer, Merchant, Admin, All)
     if (query.role === "customer") {
       whereClauses.push(
-        "(recipient = 'CUSTOMER' OR recipient = 'customer' OR type IN ('QUOTE_RECEIVED', 'OFFER_ALERT', 'SPECIAL_OFFER', 'CUSTOMER_ALERT'))"
+        "(recipient = 'CUSTOMER' OR recipient = 'customer' OR type IN ('QUOTE_RECEIVED', 'OFFER_ALERT', 'SPECIAL_OFFER', 'CUSTOMER_ALERT', 'WALLET_TRANSACTION_CUSTOMER'))"
       );
     } else if (query.role === "merchant") {
       whereClauses.push(
-        "(recipient = 'MERCHANT' OR recipient = 'merchant' OR type IN ('LEAD_RECEIVED', 'KYC_VERIFICATION', 'REVIEW_RECEIVED', 'SUBSCRIPTION_UPDATE', 'MERCHANT_ALERT'))"
+        "(recipient = 'MERCHANT' OR recipient = 'merchant' OR type IN ('LEAD_RECEIVED', 'KYC_VERIFICATION', 'REVIEW_RECEIVED', 'SUBSCRIPTION_UPDATE', 'MERCHANT_ALERT', 'WALLET_TRANSACTION_MERCHANT'))"
       );
     } else if (query.role === "admin") {
       whereClauses.push(
@@ -303,11 +303,58 @@ export class NotificationsService implements OnModuleInit {
       this.db.queryOne<{ count: number }>("SELECT COUNT(*) as count FROM notifications WHERE is_read = 0") || { count: 0 }
     ).count;
 
+    // Real dynamic summary counts per category for the pastel cards:
+    const custEnquiries = (this.db.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE (recipient = 'CUSTOMER' OR recipient = 'customer') AND type IN ('ENQUIRY_UPDATE', 'QUOTE_RECEIVED')`
+    ) || { count: 0 }).count;
+
+    const custReplies = (this.db.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE (recipient = 'CUSTOMER' OR recipient = 'customer') AND type IN ('QUOTE_RECEIVED', 'ENQUIRY_UPDATE')`
+    ) || { count: 0 }).count;
+
+    const custOffers = (this.db.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE (recipient = 'CUSTOMER' OR recipient = 'customer') AND type IN ('OFFER_ALERT', 'SPECIAL_OFFER')`
+    ) || { count: 0 }).count;
+
+    const custSecurity = (this.db.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE (recipient = 'CUSTOMER' OR recipient = 'customer') AND type IN ('KYC_VERIFICATION', 'SYSTEM_ALERT')`
+    ) || { count: 0 }).count;
+
+    const partnerLeads = (this.db.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE (recipient = 'MERCHANT' OR recipient = 'merchant' OR recipient LIKE '+91%') AND type = 'LEAD_RECEIVED'`
+    ) || { count: 0 }).count;
+
+    const partnerKyc = (this.db.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE (recipient = 'MERCHANT' OR recipient = 'merchant' OR recipient LIKE '+91%') AND type = 'KYC_VERIFICATION'`
+    ) || { count: 0 }).count;
+
+    const partnerReviews = (this.db.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE (recipient = 'MERCHANT' OR recipient = 'merchant' OR recipient LIKE '+91%') AND type = 'REVIEW_RECEIVED'`
+    ) || { count: 0 }).count;
+
+    const partnerSystem = (this.db.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM notifications WHERE (recipient = 'MERCHANT' OR recipient = 'merchant' OR recipient LIKE '+91%') AND type IN ('SYSTEM_ALERT', 'SUBSCRIPTION_UPDATE')`
+    ) || { count: 0 }).count;
+
     return {
       customerUnread,
       merchantUnread,
       adminUnread,
       totalUnread,
+      summary: {
+        customer: {
+          enquiries: custEnquiries,
+          replies: custReplies,
+          offers: custOffers,
+          security: custSecurity,
+        },
+        merchant: {
+          leads: partnerLeads,
+          kyc: partnerKyc,
+          reviews: partnerReviews,
+          system: partnerSystem,
+        },
+      },
     };
   }
 

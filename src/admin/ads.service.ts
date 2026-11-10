@@ -777,9 +777,20 @@ export class AdsService {
 
   updatePushTemplate(id: string, payload: any) {
     const now = new Date().toISOString();
+    const title = payload.titleTemplate !== undefined ? payload.titleTemplate : (payload.title_template ?? null);
+    const body = payload.bodyTemplate !== undefined ? payload.bodyTemplate : (payload.body_template ?? null);
+    const dest = payload.destinationUrl !== undefined ? payload.destinationUrl : (payload.destination_url ?? null);
+    const status = payload.status ?? null;
+
     this.db.execute(
-      "UPDATE push_templates SET title_template = COALESCE(?, title_template), body_template = COALESCE(?, body_template), destination_url = COALESCE(?, destination_url), status = COALESCE(?, status), updated_at = ? WHERE id = ?",
-      [payload.titleTemplate, payload.bodyTemplate, payload.destinationUrl, payload.status, now, id]
+      `UPDATE push_templates SET 
+        title_template = COALESCE(?, title_template), 
+        body_template = COALESCE(?, body_template), 
+        destination_url = COALESCE(?, destination_url), 
+        status = COALESCE(?, status), 
+        updated_at = ? 
+      WHERE id = ?`,
+      [title, body, dest, status, now, id]
     );
     return this.db.query("SELECT * FROM push_templates WHERE id = ?", [id])[0];
   }
