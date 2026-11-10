@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
+import { NotificationDeliveryService } from "../notifications/notification-delivery.service";
 import * as crypto from "node:crypto";
 
 export interface CreateReviewInput {
@@ -11,7 +12,10 @@ export interface CreateReviewInput {
 
 @Injectable()
 export class ReviewsService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly deliveryService: NotificationDeliveryService
+  ) {}
 
   addOrUpdateReview(input: CreateReviewInput) {
     if (!input.businessId) {
@@ -66,6 +70,33 @@ export class ReviewsService {
       `UPDATE businesses SET average_rating = ?, total_reviews = ? WHERE id = ?`,
       [newAvg, newCount, input.businessId]
     );
+
+    // Event-Driven Outbox Notification: Alert Business Partner of new review
+    try {
+      const owner = this.db.queryOne<any>(
+        "SELECT u.id, u.phone_number FROM business_owners bo JOIN users u ON bo.user_id = u.id WHERE bo.business_id = ?",
+        [input.businessId]
+      );
+      const recipientPhone = owner?.phone_number;
+      const recipientId = owner?.id;
+      const customer = this.db.queryOne<any>("SELECT full_name FROM users WHERE id = ?", [input.userId]);
+      const customerName = customer?.full_name || "A verified customer";
+
+      this.deliveryService.enqueueNotification({
+        idempotencyKey: `rev_inapp_${reviewId}_${Date.now()}`,
+        eventType: "NEW_CUSTOMER_REVIEW",
+        recipientId,
+        recipientRole: "VENDOR_OWNER",
+        recipientPhone,
+        channel: "IN_APP",
+        category: "REVIEWS",
+        title: `New Customer Review: ${business.name}`,
+        message: `You received a ${input.rating}★ review from ${customerName}. "${input.reviewText || 'Excellent service!'}"`,
+        payload: { reviewId, businessId: input.businessId, rating: input.rating },
+      });
+    } catch (e: any) {
+      console.warn("[ReviewsService] Review notification outbox dispatch note:", e?.message);
+    }
 
     return {
       id: reviewId,

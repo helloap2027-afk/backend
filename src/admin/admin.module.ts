@@ -7,9 +7,11 @@ import { EmailController } from "./email.controller";
 import { EmailService } from "./email.service";
 import { DatabaseModule } from "../database/database.module";
 import { AuthModule } from "../auth/auth.module";
+import { NotificationsModule } from "../notifications/notifications.module";
+import { WalletModule } from "../wallet/wallet.module";
 
 @Module({
-  imports: [DatabaseModule, AuthModule],
+  imports: [DatabaseModule, AuthModule, NotificationsModule, WalletModule],
   controllers: [AdminController, AdsController, EmailController],
   providers: [AdminService, AdsService, EmailService],
   exports: [AdminService, AdsService, EmailService],

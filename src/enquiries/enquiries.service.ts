@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
+import { NotificationDeliveryService } from "../notifications/notification-delivery.service";
 import * as crypto from "node:crypto";
 
 export interface CreateEnquiryInput {
@@ -28,7 +29,10 @@ export interface CreateInstantQuoteInput {
 
 @Injectable()
 export class EnquiriesService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly deliveryService: NotificationDeliveryService
+  ) {}
 
   private normalizeIndianPhone(phone: string): string {
     const cleaned = phone.replace(/[^\d+]/g, "");
@@ -174,20 +178,59 @@ export class EnquiriesService {
       [business.id]
     );
 
-    // Automated Push Notification Trigger (NEW_ENQUIRY_RECEIVED)
+    // MILESTONE 6: Durable Outbox Dispatch to Business Partner (In-App + SMS/WhatsApp + Push)
     try {
-      const template = this.db.queryOne<any>(
-        `SELECT title_template, body_template, status FROM push_templates WHERE event_type = 'NEW_ENQUIRY_RECEIVED' AND status = 'ACTIVE'`
+      const owner = this.db.queryOne<any>(
+        "SELECT u.id, u.phone_number, u.email FROM business_owners bo JOIN users u ON bo.user_id = u.id WHERE bo.business_id = ?",
+        [business.id]
       );
-      const title = template?.title_template?.replace("{{service_name}}", business.name) || `New enquiry for ${business.name}!`;
-      const body = template?.body_template?.replace("{{locality}}", "your service area") || `A customer (${input.customerName.trim()}) requested a callback for ${business.name}.`;
+      const partnerRecipientId = owner?.id;
+      const partnerPhone = owner?.phone_number || business.primaryPhone;
 
-      this.db.execute(
-        `INSERT INTO notifications (id, title, message, type, recipient, is_read, related_entity, related_id, created_at)
-         VALUES (?, ?, ?, 'SYSTEM_ALERT', 'Super Admin', 0, 'enquiries', ?, ?)`,
-        [`notif_${Date.now()}`, title, body, enquiryId, now]
-      );
-    } catch {}
+      // 1. IN_APP Notification for Partner
+      this.deliveryService.enqueueNotification({
+        idempotencyKey: `enq_inapp_${enquiryId}`,
+        eventType: "NEW_LEAD_RECEIVED",
+        recipientId: partnerRecipientId,
+        recipientRole: "VENDOR_OWNER",
+        recipientPhone: partnerPhone,
+        channel: "IN_APP",
+        category: "LEADS",
+        title: `New Customer Lead: ${input.customerName.trim()}`,
+        message: `You have received a new customer lead for ${business.name}: "${input.message.trim()}". Respond quickly to close.`,
+        payload: { enquiryId, referenceNo, businessId: business.id },
+      });
+
+      // 2. WHATSAPP / SMS Notification for Partner
+      this.deliveryService.enqueueNotification({
+        idempotencyKey: `enq_whatsapp_${enquiryId}`,
+        eventType: "NEW_LEAD_RECEIVED",
+        recipientId: partnerRecipientId,
+        recipientRole: "VENDOR_OWNER",
+        recipientPhone: partnerPhone,
+        channel: "WHATSAPP",
+        category: "LEADS",
+        title: `New HELLO-Hi Lead Alert`,
+        message: `Hello ${business.name}! New customer enquiry received from ${input.customerName.trim()} (${normalizedPhone}). View in your Business Partner Center.`,
+        payload: { enquiryId, referenceNo, businessId: business.id },
+      });
+
+      // 3. Customer Acknowledgement IN_APP
+      this.deliveryService.enqueueNotification({
+        idempotencyKey: `enq_cust_ack_${enquiryId}`,
+        eventType: "ENQUIRY_SENT_SUCCESS",
+        recipientId: customerId,
+        recipientRole: "CUSTOMER",
+        recipientPhone: normalizedPhone,
+        channel: "IN_APP",
+        category: "QUOTES",
+        title: `Enquiry Sent: ${business.name}`,
+        message: `Your enquiry for "${business.name}" has been delivered successfully. The merchant will connect with you shortly.`,
+        payload: { enquiryId, referenceNo, businessId: business.id },
+      });
+    } catch (e: any) {
+      console.warn("[EnquiriesService] Delivery queue notice:", e?.message);
+    }
 
     return {
       id: enquiryId,
